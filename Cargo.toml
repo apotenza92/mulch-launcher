@@ -1,0 +1,33 @@
+[package]
+name = "mulch-launcher"
+version = "0.1.0"
+edition = "2024"
+description = "The low-maintenance game launcher: every installed game, from every platform, with zero setup."
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "mulch"
+path = "src/main.rs"
+
+[dependencies]
+gpui-kit = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+windows = { version = "0.61", features = [
+    "ApplicationModel",
+    "ApplicationModel_Core",
+    "Foundation",
+    "Foundation_Collections",
+    "Management_Deployment",
+    "Storage",
+    "Win32_System_WinRT",
+] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
