@@ -77,6 +77,7 @@ pub fn scan(entries: &[UninstallEntry]) -> Vec<Game> {
                 working_dir: None,
             }),
             art: None,
+            icon_source: super::art::icon_path(&entry.display_icon),
         });
     }
     games

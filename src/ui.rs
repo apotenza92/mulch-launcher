@@ -1,52 +1,105 @@
-//! The main window: every detected game as a tile, plus buttons for the
-//! launchers that are installed.
+//! The main window: every detected game as a tile, sized so they all fit
+//! (scrolling once tiles reach their minimum size), plus a row of icons for
+//! the installed launchers, in alphabetical order.
 
-use crate::launch;
-use crate::scan::{self, Action, Game, Launcher, Platform, ScanResult, manual};
+use mulch_launcher::install;
+use mulch_launcher::launch;
+use mulch_launcher::layout::{COVER_ASPECT, GRID_GAP, GridLayout, fit_tiles_stable};
+use mulch_launcher::scan::{self, Action, Art, Game, Launcher, Platform, ScanResult, art, manual};
+use mulch_launcher::settings::Settings;
 use gpui_kit::component::button::*;
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::theme::{ActiveTheme, Theme, ThemeMode};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{WindowExt, *};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-const TILE_WIDTH: f32 = 168.;
-const TILE_HEIGHT: f32 = 252.;
+const APP_NAME: &str = "MulchLauncher";
 
-pub fn run() {
-    gpui_kit::application().with_assets(gpui_kit::assets::Assets).run(|cx| {
+/// `pin_requested`: the installed copy was started by setup with "pin to
+/// taskbar" ticked, so ask Windows to pin it.
+pub fn run(pin_requested: bool) {
+    gpui_kit::application().with_assets(gpui_kit::assets::Assets).run(move |cx| {
         gpui_kit::init(cx);
         Theme::change(ThemeMode::Dark, None, cx);
 
         let options = WindowOptions {
-            titlebar: Some(TitlebarOptions { title: Some("Mulch".into()), ..Default::default() }),
+            titlebar: Some(TitlebarOptions { title: Some(APP_NAME.into()), ..Default::default() }),
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(1240.), px(820.)), cx))),
-            window_min_size: Some(size(px(560.), px(420.))),
-            app_id: Some("MulchLauncher".into()),
+            window_min_size: Some(size(px(480.), px(360.))),
+            app_id: Some(APP_NAME.into()),
             ..Default::default()
         };
-        gpui_kit::open_window(options, cx, |_, cx| cx.new(MulchApp::new)).expect("failed to open the Mulch window");
+        gpui_kit::open_window(options, cx, |_, cx| cx.new(|cx| MulchApp::new(pin_requested, cx)))
+            .expect("failed to open the window");
     });
 }
 
 struct MulchApp {
     games: Vec<Game>,
     launchers: Vec<Launcher>,
+    settings: Settings,
     scanning: bool,
-    last_scan: Option<Duration>,
+    /// A game the user clicked, waiting for a second click on Play.
+    pending_play: Option<PendingPlay>,
+    /// First-run setup, while it's showing.
+    setup: Option<SetupStep>,
+    pin_on_finish: bool,
+    /// Launchers pinned to the user's taskbar (setup suggests unpinning them).
+    pinned_launchers: Vec<String>,
+    /// Ask Windows to pin us on the next render (needs a live window).
+    pin_pending: bool,
+    /// The grid layout for the current window size (recomputed every frame).
+    layout: Option<GridLayout>,
+    /// The tile width actually drawn: it eases towards the layout's width so
+    /// resizing feels smooth rather than jumpy.
+    shown_tile_width: f32,
+    animating: bool,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum SetupStep {
+    Welcome,
+    OtherGames,
+    Taskbar,
+}
+
+struct PendingPlay {
+    game: Game,
+    /// Where the click happened; the Play button opens under it.
+    at: Point<Pixels>,
 }
 
 impl MulchApp {
-    fn new(cx: &mut Context<Self>) -> Self {
-        let mut app = Self { games: Vec::new(), launchers: Vec::new(), scanning: false, last_scan: None };
+    fn new(pin_requested: bool, cx: &mut Context<Self>) -> Self {
+        let settings = Settings::load();
+        let setup = (!settings.setup_done).then_some(SetupStep::Welcome);
+        let mut app = Self {
+            setup,
+            pin_on_finish: false,
+            pinned_launchers: Vec::new(),
+            pin_pending: pin_requested,
+            layout: None,
+            shown_tile_width: 0.,
+            animating: false,
+            games: Vec::new(),
+            launchers: Vec::new(),
+            settings,
+            scanning: false,
+            pending_play: None,
+        };
         app.rescan(cx);
         app
     }
 
-    /// Scans on a background thread so the window opens instantly.
+    /// Scans on a background thread so the window opens instantly, then
+    /// fills in icons (slower on first run) as a second step.
     fn rescan(&mut self, cx: &mut Context<Self>) {
         if self.scanning {
             return;
@@ -55,7 +108,17 @@ impl MulchApp {
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx.background_spawn(async move { scan::scan_all() }).await;
+            let (mut games, mut launchers) = (result.games.clone(), result.launchers.clone());
             this.update(cx, |app, cx| app.apply(result, cx)).ok();
+
+            let (games, launchers) = cx
+                .background_spawn(async move {
+                    art::fill_missing(&mut games);
+                    art::fill_launchers(&mut launchers);
+                    (games, launchers)
+                })
+                .await;
+            this.update(cx, |app, cx| app.apply_art(games, launchers, cx)).ok();
         })
         .detach();
     }
@@ -63,8 +126,106 @@ impl MulchApp {
     fn apply(&mut self, result: ScanResult, cx: &mut Context<Self>) {
         self.games = result.games;
         self.launchers = result.launchers;
-        self.last_scan = Some(result.total);
+        self.launchers.sort_by_key(|l| l.name.to_lowercase());
+        let names: Vec<&str> = self.launchers.iter().map(|l| l.name).collect();
+        self.pinned_launchers = install::pinned_launchers(&names);
         self.scanning = false;
+        self.pending_play = None;
+        cx.notify();
+    }
+
+    /// First click on a game: show a Play button right under the cursor, so a
+    /// second click (or a double-click) starts it and a stray click does nothing.
+    fn request_play(&mut self, game: Game, at: Point<Pixels>, cx: &mut Context<Self>) {
+        self.pending_play = Some(PendingPlay { game, at });
+        cx.notify();
+    }
+
+    fn cancel_play(&mut self, cx: &mut Context<Self>) {
+        self.pending_play = None;
+        cx.notify();
+    }
+
+    fn play_pending(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(pending) = self.pending_play.take() {
+            run_action(&pending.game.launch, &pending.game.name, window, cx);
+        }
+        cx.notify();
+    }
+
+    fn play_card(&self, pending: &PendingPlay, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let card = v_flex()
+            .id("play-card")
+            .occlude()
+            .w(px(PLAY_CARD_WIDTH))
+            .p(px(PLAY_CARD_PADDING))
+            .gap_2()
+            .rounded_lg()
+            .bg(theme.popover)
+            .border_1()
+            .border_color(theme.border)
+            .shadow_lg()
+            .child(
+                Button::new("confirm-play")
+                    .primary()
+                    .w_full()
+                    .h(px(PLAY_BUTTON_HEIGHT))
+                    .icon(IconName::Play)
+                    .label("Play")
+                    .on_click(cx.listener(|app, _, window, cx| app.play_pending(window, cx))),
+            )
+            .child(div().text_sm().font_medium().truncate().child(pending.game.name.clone()))
+            .child(div().text_xs().text_color(theme.muted_foreground).child(format!("via {}", pending.game.platform.label())))
+            .child(
+                Button::new("cancel-play")
+                    .ghost()
+                    .xsmall()
+                    .label("Cancel")
+                    .on_click(cx.listener(|app, _, _, cx| app.cancel_play(cx))),
+            );
+
+        deferred(
+            div()
+                .id("play-backdrop")
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .occlude()
+                .on_mouse_down(MouseButton::Left, cx.listener(|app, _, _, cx| app.cancel_play(cx)))
+                .on_mouse_down(MouseButton::Right, cx.listener(|app, _, _, cx| app.cancel_play(cx)))
+                .child(
+                    anchored()
+                        .position_mode(AnchoredPositionMode::Window)
+                        .position(pending.at)
+                        // Put the middle of the Play button under the cursor.
+                        .offset(point(
+                            px(-PLAY_CARD_WIDTH / 2.),
+                            px(-(PLAY_CARD_PADDING + PLAY_BUTTON_HEIGHT / 2.)),
+                        ))
+                        .snap_to_window_with_margin(px(8.))
+                        .child(card),
+                ),
+        )
+        .with_priority(2)
+        .into_any_element()
+    }
+
+    fn apply_art(&mut self, games: Vec<Game>, launchers: Vec<Launcher>, cx: &mut Context<Self>) {
+        // Icons may have been added or replaced with trimmed copies.
+        let game_art: HashMap<String, Art> = games.into_iter().filter_map(|g| Some((g.id, g.art?))).collect();
+        for game in &mut self.games {
+            if let Some(art) = game_art.get(&game.id) {
+                game.art = Some(art.clone());
+            }
+        }
+        let launcher_icons: HashMap<&str, PathBuf> = launchers.into_iter().filter_map(|l| Some((l.name, l.icon?))).collect();
+        for launcher in &mut self.launchers {
+            if let Some(icon) = launcher_icons.get(launcher.name) {
+                launcher.icon = Some(icon.clone());
+            }
+        }
         cx.notify();
     }
 
@@ -90,98 +251,309 @@ impl MulchApp {
         self.rescan(cx);
     }
 
-    fn header(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// The layout for the grid's available space, recomputed every frame so
+    /// columns and sizes follow the window. The drawn tile width eases towards
+    /// the target instead of jumping.
+    fn grid_layout(&mut self, space: (f32, f32), cx: &mut Context<Self>) -> GridLayout {
+        let target = fit_tiles_stable(self.layout.as_ref(), self.games.len(), space.0, space.1);
+        self.layout = Some(target);
+        if self.shown_tile_width <= 0. {
+            self.shown_tile_width = target.tile_width;
+        }
+        if (target.tile_width - self.shown_tile_width).abs() > 0.5 && !self.animating {
+            self.animating = true;
+            cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(FRAME).await;
+                    let done = this.update(cx, |app, cx| {
+                        let target = app.layout.map(|l| l.tile_width).unwrap_or(app.shown_tile_width);
+                        app.shown_tile_width += (target - app.shown_tile_width) * EASING;
+                        let done = (target - app.shown_tile_width).abs() <= 0.5;
+                        if done {
+                            app.shown_tile_width = target;
+                            app.animating = false;
+                        }
+                        cx.notify();
+                        done
+                    });
+                    if done.unwrap_or(true) {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
+        GridLayout { tile_width: self.shown_tile_width, ..target }
+    }
+
+    fn set_setup_step(&mut self, step: SetupStep, cx: &mut Context<Self>) {
+        self.setup = Some(step);
+        cx.notify();
+    }
+
+    /// Ends first-run setup. A downloaded copy installs itself and hands over
+    /// to the installed copy; an installed or development copy just carries on.
+    fn finish_setup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings.setup_done = true;
+        self.settings.save();
+        self.setup = None;
+
+        if !install::is_dev_build() && !install::is_installed_copy() {
+            match install::install() {
+                Ok(installed) => {
+                    let args: &[&str] = if self.pin_on_finish { &["--pin"] } else { &[] };
+                    if install::relaunch(&installed, args).is_ok() {
+                        cx.quit();
+                        return;
+                    }
+                }
+                Err(err) => {
+                    window.push_notification(Notification::error(format!("Couldn't install MulchLauncher: {err}")), cx);
+                }
+            }
+        }
+        if self.pin_on_finish {
+            self.pin_pending = true;
+        }
+        cx.notify();
+    }
+
+    /// Asks Windows to pin the app; if Windows won't let it, says how to do it by hand.
+    fn pin_to_taskbar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.pin_pending = false;
+        if !install::request_taskbar_pin() {
+            window.push_notification(
+                Notification::info(
+                    "Windows only lets you pin apps yourself: right-click MulchLauncher in the taskbar and choose \
+                     \"Pin to taskbar\".",
+                )
+                .title("Pin to taskbar")
+                .autohide(false),
+                cx,
+            );
+        }
+    }
+
+    fn setup_panel(&self, step: SetupStep, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
-        let status = if self.scanning && self.games.is_empty() {
-            "Looking for your games…".to_string()
-        } else {
-            let count = self.games.len();
-            let timing = self.last_scan.map(|t| format!(" · found in {} ms", t.as_millis())).unwrap_or_default();
-            format!("{count} game{}{timing}", if count == 1 { "" } else { "s" })
+        let muted = theme.muted_foreground;
+        let platforms: Vec<&str> = {
+            let mut names: Vec<&str> = self.games.iter().map(|g| g.platform.label()).collect();
+            names.sort_unstable();
+            names.dedup();
+            names
+        };
+        let installing = !install::is_dev_build() && !install::is_installed_copy();
+
+        let (title, body, actions): (&str, AnyElement, AnyElement) = match step {
+            SetupStep::Welcome => {
+                let summary = if self.scanning && self.games.is_empty() {
+                    "Looking for your games…".to_string()
+                } else if self.games.is_empty() {
+                    "No installed games found yet. Install one with any launcher and it will show up here.".to_string()
+                } else {
+                    format!(
+                        "Found {} game{} from {}. Nothing to set up: whenever MulchLauncher opens, it finds \
+                         what's installed, wherever it's installed.",
+                        self.games.len(),
+                        if self.games.len() == 1 { "" } else { "s" },
+                        platforms.join(", ")
+                    )
+                };
+                (
+                    "Welcome to MulchLauncher",
+                    div().text_sm().text_color(muted).child(summary).into_any_element(),
+                    Button::new("setup-next")
+                        .primary()
+                        .label("Next")
+                        .on_click(cx.listener(|app, _, _, cx| app.set_setup_step(SetupStep::OtherGames, cx)))
+                        .into_any_element(),
+                )
+            }
+            SetupStep::OtherGames => (
+                "Any other games?",
+                div()
+                    .text_sm()
+                    .text_color(muted)
+                    .child(
+                        "Games from anywhere else, like emulators, itch.io downloads or old installers, can be \
+                         added by picking their .exe. You can always do this later with Add game.",
+                    )
+                    .into_any_element(),
+                h_flex()
+                    .gap_2()
+                    .child(
+                        Button::new("setup-add")
+                            .outline()
+                            .icon(IconName::Plus)
+                            .label("Add games…")
+                            .on_click(cx.listener(|app, _, _, cx| app.add_games(cx))),
+                    )
+                    .child(
+                        Button::new("setup-next")
+                            .primary()
+                            .label("Next")
+                            .on_click(cx.listener(|app, _, _, cx| app.set_setup_step(SetupStep::Taskbar, cx))),
+                    )
+                    .into_any_element(),
+            ),
+            SetupStep::Taskbar => {
+                let pinned_note = (!self.pinned_launchers.is_empty()).then(|| {
+                    div()
+                        .text_sm()
+                        .text_color(muted)
+                        .child(format!(
+                            "{} {} pinned to your taskbar. MulchLauncher has a button for each, so you could \
+                             unpin them: right-click each one in the taskbar and choose \"Unpin from taskbar\".",
+                            self.pinned_launchers.join(", "),
+                            if self.pinned_launchers.len() == 1 { "is" } else { "are" }
+                        ))
+                });
+                (
+                    "Taskbar",
+                    v_flex()
+                        .gap_3()
+                        .child(
+                            Checkbox::new("setup-pin")
+                                .checked(self.pin_on_finish)
+                                .label("Pin MulchLauncher to the taskbar")
+                                .on_click(cx.listener(|app, checked: &bool, _, cx| {
+                                    app.pin_on_finish = *checked;
+                                    cx.notify();
+                                })),
+                        )
+                        .children(pinned_note)
+                        .into_any_element(),
+                    Button::new("setup-finish")
+                        .primary()
+                        .label(if installing { "Install and finish" } else { "Finish" })
+                        .on_click(cx.listener(|app, _, window, cx| app.finish_setup(window, cx)))
+                        .into_any_element(),
+                )
+            }
         };
 
-        let launcher_buttons = self.launchers.iter().enumerate().map(|(ix, launcher)| {
-            let open = launcher.open.clone();
-            let name = launcher.name;
-            Button::new(("launcher", ix))
-                .ghost()
-                .small()
-                .label(name)
-                .tooltip(format!("Open {name}"))
-                .on_click(move |_, window, cx| run_action(&open, name, window, cx))
-        });
+        let step_number = match step {
+            SetupStep::Welcome => 1,
+            SetupStep::OtherGames => 2,
+            SetupStep::Taskbar => 3,
+        };
+
+        deferred(
+            div()
+                .id("setup-backdrop")
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .occlude()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(theme.background.opacity(0.85))
+                .child(
+                    v_flex()
+                        .w(px(440.))
+                        .p_6()
+                        .gap_4()
+                        .rounded_lg()
+                        .bg(theme.popover)
+                        .border_1()
+                        .border_color(theme.border)
+                        .shadow_lg()
+                        .child(div().text_xs().text_color(muted).child(format!("Step {step_number} of 3")))
+                        .child(div().text_xl().font_semibold().child(title))
+                        .child(body)
+                        .child(h_flex().justify_end().child(actions)),
+                ),
+        )
+        .with_priority(3)
+        .into_any_element()
+    }
+
+    fn header(&self, cx: &mut Context<Self>) -> AnyElement {
+        let launcher_icons: Vec<_> =
+            self.launchers.iter().enumerate().map(|(ix, launcher)| self.launcher_icon(ix, launcher, cx)).collect();
+        let theme = cx.theme();
 
         h_flex()
             .w_full()
+            .h(px(HEADER_HEIGHT))
+            .flex_shrink_0()
             .px_5()
-            .py_3()
             .gap_4()
             .border_b_1()
             .border_color(theme.border)
+            .child(h_flex().flex_1().gap_3().children(launcher_icons))
             .child(
-                v_flex()
-                    .child(div().text_xl().font_semibold().child("Mulch"))
-                    .child(div().text_xs().text_color(theme.muted_foreground).child(status)),
-            )
-            .child(h_flex().flex_1().gap_1().flex_wrap().children(launcher_buttons))
-            .child(
-                Button::new("rescan")
-                    .ghost()
-                    .small()
-                    .icon(IconName::RefreshCw)
-                    .loading(self.scanning)
-                    .tooltip("Scan again")
-                    .on_click(cx.listener(|app, _, _, cx| app.rescan(cx))),
-            )
-            .child(
-                Button::new("add-game")
-                    .primary()
-                    .small()
-                    .icon(IconName::Plus)
-                    .label("Add game")
-                    .on_click(cx.listener(|app, _, _, cx| app.add_games(cx))),
+                h_flex()
+                    .gap_2()
+                    .child(
+                        Button::new("rescan")
+                            .ghost()
+                            .small()
+                            .icon(IconName::RefreshCw)
+                            .loading(self.scanning)
+                            .tooltip("Scan again")
+                            .on_click(cx.listener(|app, _, _, cx| app.rescan(cx))),
+                    )
+                    .child(
+                        Button::new("add-game")
+                            .primary()
+                            .small()
+                            .icon(IconName::Plus)
+                            .label("Add game")
+                            .on_click(cx.listener(|app, _, _, cx| app.add_games(cx))),
+                    ),
             )
             .into_any_element()
     }
 
-    fn tile(&self, ix: usize, game: &Game, cx: &mut Context<Self>) -> AnyElement {
+    fn launcher_icon(&self, ix: usize, launcher: &Launcher, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
-        let cover = match &game.art {
-            Some(path) => img(path.clone()).size_full().object_fit(ObjectFit::Cover).into_any_element(),
-            None => v_flex()
-                .size_full()
-                .items_center()
-                .justify_center()
-                .p_3()
-                .text_center()
-                .text_lg()
-                .font_semibold()
-                .text_color(theme.muted_foreground)
-                .child(game.name.clone())
-                .into_any_element(),
-        };
+        let name = launcher.name;
+        let open = launcher.open.clone();
 
-        let launch = game.launch.clone();
-        let name = game.name.clone();
+        div()
+            .id(("launcher", ix))
+            .size(px(LAUNCHER_SIZE))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_md()
+            .cursor_pointer()
+            .hover(|style| style.bg(theme.list_hover))
+            .child(launcher_glyph(name, launcher.icon.clone(), theme.muted_foreground))
+            .tooltip(move |window, cx| Tooltip::new(format!("Open {name}")).build(window, cx))
+            .on_click(move |_, window, cx| run_action(&open, name, window, cx))
+            .into_any_element()
+    }
+
+    fn tile(&self, ix: usize, game: &Game, layout: &GridLayout, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let (width, height) = (layout.tile_width, layout.tile_width * COVER_ASPECT);
+
+        let play_game = game.clone();
         let menu_game = game.clone();
         let app = cx.entity().downgrade();
 
         div()
             .id(("game", ix))
-            .w(px(TILE_WIDTH))
+            .relative()
+            .w(px(width))
             .cursor_pointer()
-            .on_click(move |_, window, cx| run_action(&launch, &name, window, cx))
+            .on_click(cx.listener(move |app, _, window, cx| app.request_play(play_game.clone(), window.mouse_position(), cx)))
             .child(
                 div()
-                    .w(px(TILE_WIDTH))
-                    .h(px(TILE_HEIGHT))
+                    .w(px(width))
+                    .h(px(height))
                     .rounded_lg()
                     .overflow_hidden()
                     .bg(theme.muted)
                     .border_1()
                     .border_color(theme.border)
                     .hover(|style| style.border_color(theme.primary))
-                    .child(cover),
+                    .child(artwork(game, width)),
             )
             .child(div().pt_2().text_sm().font_medium().truncate().child(game.name.clone()))
             .child(div().text_xs().text_color(theme.muted_foreground).child(game.platform.label()))
@@ -190,30 +562,99 @@ impl MulchApp {
     }
 }
 
+const LAUNCHER_SIZE: f32 = 36.;
+/// Tile-size easing, so columns and sizes follow the window smoothly.
+const FRAME: Duration = Duration::from_millis(16);
+/// Fraction of the remaining distance a tile's size moves each frame.
+const EASING: f32 = 0.3;
+/// How much of a tile's width an icon (rather than cover art) takes up.
+const ICON_SHARE: f32 = 0.6;
+const PLAY_CARD_WIDTH: f32 = 180.;
+const PLAY_CARD_PADDING: f32 = 8.;
+const PLAY_BUTTON_HEIGHT: f32 = 36.;
+const GRID_PADDING: f32 = 20.;
+const HEADER_HEIGHT: f32 = 72.;
+/// Slack so pixel rounding never clips the last row.
+const FIT_SLACK: f32 = 8.;
+
+/// Cover art fills the tile. Icons (already trimmed of transparent padding)
+/// sit centred at a fixed share of the tile, so they all look the same size.
+/// No words inside the tile: the name is always shown underneath.
+fn artwork(game: &Game, width: f32) -> AnyElement {
+    match &game.art {
+        Some(Art::Cover(path)) => img(path.clone()).size_full().object_fit(ObjectFit::Cover).into_any_element(),
+        Some(Art::Icon(path)) => div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(img(path.clone()).size(px(width * ICON_SHARE)).object_fit(ObjectFit::Contain))
+            .into_any_element(),
+        None => div().size_full().into_any_element(),
+    }
+}
+
+/// The icon (or initials) for a launcher button.
+fn launcher_glyph(name: &str, icon: Option<PathBuf>, muted: Hsla) -> AnyElement {
+    match icon {
+        Some(path) => img(path).size(px(LAUNCHER_SIZE - 10.)).object_fit(ObjectFit::Contain).into_any_element(),
+        None => div()
+            .text_xs()
+            .font_semibold()
+            .text_color(muted)
+            .child(name.chars().filter(|c| c.is_uppercase()).take(2).collect::<String>())
+            .into_any_element(),
+    }
+}
+
 fn game_menu(menu: PopupMenu, game: &Game, app: WeakEntity<MulchApp>) -> PopupMenu {
-    let launch = game.launch.clone();
-    let name = game.name.clone();
-    let mut menu = menu.item(PopupMenuItem::new("Play").on_click(move |_, window, cx| run_action(&launch, &name, window, cx)));
+    let play_game = game.clone();
+    let play_app = app.clone();
+    let mut menu = menu.item(PopupMenuItem::new("Play").on_click(move |_, window, cx| {
+        let at = window.mouse_position();
+        play_app.update(cx, |app, cx| app.request_play(play_game.clone(), at, cx)).ok();
+    }));
 
     if let Some(dir) = game.install_dir.clone() {
-        menu = menu.item(PopupMenuItem::new("Open folder").on_click(move |_, _, cx| cx.reveal_path(&dir)));
+        menu = menu.item(PopupMenuItem::new("Open folder").on_click(move |_, _, cx| cx.open_with_system(&dir)));
     }
-    if let Some(uninstall) = game.uninstall.clone() {
-        let name = game.name.clone();
+    if game.uninstall.is_some() {
+        let uninstall_game = game.clone();
         menu = menu.separator().item(
-            PopupMenuItem::new(format!("Uninstall with {}", game.platform.label()))
-                .on_click(move |_, window, cx| run_action(&uninstall, &name, window, cx)),
+            PopupMenuItem::new(format!("Uninstall with {}…", game.platform.label()))
+                .on_click(move |_, window, cx| confirm_uninstall(&uninstall_game, window, cx)),
         );
     }
     if game.platform == Platform::Manual {
         if let Action::Exe { path, .. } = &game.launch {
             let exe = path.clone();
-            menu = menu.separator().item(PopupMenuItem::new("Remove from Mulch").on_click(move |_, _, cx| {
+            menu = menu.separator().item(PopupMenuItem::new("Remove from MulchLauncher").on_click(move |_, _, cx| {
                 app.update(cx, |app, cx| app.remove_manual(exe.clone(), cx)).ok();
             }));
         }
     }
     menu
+}
+
+fn confirm_uninstall(game: &Game, window: &mut Window, cx: &mut App) {
+    let game = game.clone();
+    window.open_alert_dialog(cx, move |dialog, _, _| {
+        let Some(uninstall) = game.uninstall.clone() else { return dialog };
+        let name = game.name.clone();
+        let platform = game.platform.label();
+        dialog
+            .title(SharedString::from(format!("Uninstall {}?", game.name)))
+            .description(SharedString::from(format!(
+                "Opens {platform}'s uninstaller for this game. {platform} will ask you to confirm."
+            )))
+            .confirm()
+            .ok_text("Continue")
+            .cancel_text("Cancel")
+            .on_ok(move |_, window, cx| {
+                run_action(&uninstall, &name, window, cx);
+                true
+            })
+    });
 }
 
 fn run_action(action: &Action, name: &str, window: &mut Window, cx: &mut App) {
@@ -223,20 +664,44 @@ fn run_action(action: &Action, name: &str, window: &mut Window, cx: &mut App) {
 }
 
 impl Render for MulchApp {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let viewport = window.viewport_size();
+        let layout = self.grid_layout(
+            (
+                f32::from(viewport.width) - GRID_PADDING * 2.,
+                f32::from(viewport.height) - HEADER_HEIGHT - GRID_PADDING * 2. - FIT_SLACK,
+            ),
+            cx,
+        );
+        let grid_width = layout.columns as f32 * (layout.tile_width + GRID_GAP) - GRID_GAP;
+
         let header = self.header(cx);
-        let tiles: Vec<_> = self.games.iter().enumerate().map(|(ix, game)| self.tile(ix, game, cx)).collect();
+        let tiles: Vec<_> = self.games.iter().enumerate().map(|(ix, game)| self.tile(ix, game, &layout, cx)).collect();
         let empty = !self.scanning && self.games.is_empty();
 
+        let play_card = self.pending_play.as_ref().map(|pending| self.play_card(pending, cx));
+        let setup_panel = self.setup.map(|step| self.setup_panel(step, cx));
+        if self.pin_pending {
+            self.pin_pending = false;
+            cx.defer_in(window, |app, window, cx| app.pin_to_taskbar(window, cx));
+        }
+
         v_flex()
+            .relative()
             .size_full()
+            .children(play_card)
+            .children(setup_panel)
             .child(header)
             .child(
                 div()
                     .id("library")
                     .flex_1()
                     .overflow_y_scroll()
-                    .p_5()
+                    .p(px(GRID_PADDING))
+                    .flex()
+                    .justify_center()
+                    // Centre the grid vertically when it fits; scroll from the top when it doesn't.
+                    .when(!layout.scrolls, |this| this.items_center())
                     .when(empty, |this| {
                         this.child(
                             v_flex()
@@ -253,7 +718,7 @@ impl Render for MulchApp {
                                 ),
                         )
                     })
-                    .child(div().flex().flex_wrap().gap_5().children(tiles)),
+                    .child(div().w(px(grid_width)).flex().flex_wrap().content_start().gap(px(GRID_GAP)).children(tiles)),
             )
     }
 }

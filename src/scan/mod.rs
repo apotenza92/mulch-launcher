@@ -4,6 +4,7 @@
 //! Windows' package database) so games on any drive or non-default install
 //! folder are found. Default paths are only ever a last-resort fallback.
 
+pub mod art;
 mod battlenet;
 mod epic;
 mod gog;
@@ -72,8 +73,18 @@ pub struct Game {
     pub install_dir: Option<PathBuf>,
     pub launch: Action,
     pub uninstall: Option<Action>,
-    /// Local cover art, if the launcher keeps one on disk.
-    pub art: Option<PathBuf>,
+    pub art: Option<Art>,
+    /// An executable or .ico to take an icon from when there's no art.
+    pub icon_source: Option<PathBuf>,
+}
+
+/// Local artwork for a tile.
+#[derive(Clone, Debug, Serialize)]
+pub enum Art {
+    /// Portrait cover art that fills the tile.
+    Cover(PathBuf),
+    /// A square icon or logo, shown centred on the tile.
+    Icon(PathBuf),
 }
 
 #[derive(Debug, Serialize)]

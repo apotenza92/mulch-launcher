@@ -1,19 +1,27 @@
 // No console window for the app itself in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-
-mod launch;
-mod scan;
 mod ui;
 
+use mulch_launcher::{install, scan};
+
 fn main() {
-    if std::env::args().any(|a| a == "--scan") {
+    let has = |flag: &str| std::env::args().any(|a| a == flag);
+    if has("--scan") {
         print_scan();
         return;
     }
-    ui::run();
+    // Run by Windows' "Installed apps" > Uninstall.
+    if has("--uninstall") {
+        if let Err(err) = install::uninstall() {
+            eprintln!("Uninstall failed: {err}");
+        }
+        return;
+    }
+    // Passed by setup when the user asked to be pinned to the taskbar.
+    ui::run(has("--pin"));
 }
 
-/// `mulch --scan`: prints everything found and how long it took.
+/// `MulchLauncher --scan`: prints everything found and how long it took.
 fn print_scan() {
     let result = scan::scan_all();
     for game in &result.games {

@@ -2,7 +2,7 @@
 //! installed games from each library's `appmanifest_*.acf`.
 
 use super::registry::{self, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
-use super::{Action, Game, Platform, vdf};
+use super::{Action, Art, Game, Platform, vdf};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -109,7 +109,8 @@ pub fn scan() -> Vec<Game> {
                 install_dir,
                 launch: Action::Uri(format!("steam://rungameid/{app_id}")),
                 uninstall: Some(Action::Uri(format!("steam://uninstall/{app_id}"))),
-                art: cover_art(&root, app_id),
+                art: cover_art(&root, app_id).map(Art::Cover),
+                icon_source: None,
             });
         }
     }

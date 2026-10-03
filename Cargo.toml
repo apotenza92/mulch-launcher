@@ -6,14 +6,21 @@ description = "The low-maintenance game launcher: every installed game, from eve
 license = "MIT"
 publish = false
 
+[lib]
+name = "mulch_launcher"
+path = "src/lib.rs"
+
 [[bin]]
-name = "mulch"
+name = "MulchLauncher"
 path = "src/main.rs"
+# Tests live in the library; the window code is too heavy to build in test mode.
+test = false
 
 [dependencies]
 gpui-kit = "0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+png = "0.17"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
@@ -24,8 +31,16 @@ windows = { version = "0.61", features = [
     "Foundation_Collections",
     "Management_Deployment",
     "Storage",
+    "UI_Shell",
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
     "Win32_System_WinRT",
+    "Win32_UI_Shell",
 ] }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
 
 [profile.release]
 lto = "thin"

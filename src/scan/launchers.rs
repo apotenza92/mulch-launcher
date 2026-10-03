@@ -12,6 +12,10 @@ pub struct Launcher {
     pub platform: Platform,
     pub name: &'static str,
     pub open: Action,
+    /// The launcher's app icon (filled in after the scan, like game art).
+    pub icon: Option<PathBuf>,
+    /// Where to take the icon from: the launcher's executable.
+    pub icon_source: Option<PathBuf>,
 }
 
 struct Known {
@@ -61,6 +65,8 @@ pub fn detect() -> Vec<Launcher> {
             Some(Launcher {
                 platform: known.platform,
                 name: known.name,
+                icon: None,
+                icon_source: Some(exe.clone()),
                 open: Action::Exe { path: exe, args: Vec::new(), working_dir: None },
             })
         })
@@ -100,5 +106,12 @@ fn xbox_app() -> Option<Launcher> {
         .into_iter()
         .next()?;
     let app_id = package.GetAppListEntries().ok()?.into_iter().find_map(|e| e.AppUserModelId().ok())?;
-    Some(Launcher { platform: Platform::Xbox, name: "Xbox", open: Action::StoreApp(app_id.to_string()) })
+    let install_dir = package.InstalledPath().ok().map(|p| PathBuf::from(p.to_string()));
+    Some(Launcher {
+        platform: Platform::Xbox,
+        name: "Xbox",
+        open: Action::StoreApp(app_id.to_string()),
+        icon: install_dir.as_deref().and_then(super::xbox::manifest_icon),
+        icon_source: None,
+    })
 }

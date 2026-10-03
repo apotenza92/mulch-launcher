@@ -40,6 +40,7 @@ pub fn scan() -> Vec<Game> {
             launch,
             uninstall: None,
             art: None,
+            icon_source: value("exe").map(PathBuf::from),
         });
     }
     games

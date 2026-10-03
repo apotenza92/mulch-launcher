@@ -7,7 +7,7 @@
 //! DLC and add-on "stub" packages also ship that config but declare no
 //! launchable app, so requiring an app entry filters them out.
 
-use super::{Action, Game, Platform};
+use super::{Action, Art, Game, Platform};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -94,7 +94,10 @@ fn scan_packages() -> windows::core::Result<Vec<Game>> {
             install_dir: Some(visible_dir),
             launch: Action::StoreApp(app_id),
             uninstall: None,
-            art: logo(&install_dir, &config),
+            art: logo(&install_dir, &config)
+                .map(Art::Cover)
+                .or_else(|| manifest_logo(&install_dir).map(Art::Icon)),
+            icon_source: None,
         });
     }
     Ok(games)
@@ -108,6 +111,46 @@ fn logo(install_dir: &Path, config: &Path) -> Option<PathBuf> {
         let path = install_dir.join(value.replace('/', "\\"));
         path.is_file().then_some(path)
     })
+}
+
+/// The app's tile logo from its package manifest, for packages whose game
+/// config has no artwork (e.g. older Xbox Live UWP games like Solitaire).
+pub fn manifest_logo(install_dir: &Path) -> Option<PathBuf> {
+    manifest_visual(install_dir, &["Square150x150Logo", "Square44x44Logo"])
+}
+
+/// The app's small app-list icon, which is drawn edge to edge (good for
+/// launcher buttons, where the padded tile logo looks tiny).
+pub fn manifest_icon(install_dir: &Path) -> Option<PathBuf> {
+    manifest_visual(install_dir, &["Square44x44Logo", "Square150x150Logo"])
+}
+
+fn manifest_visual(install_dir: &Path, attributes: &[&str]) -> Option<PathBuf> {
+    let manifest = fs::read_to_string(install_dir.join("AppxManifest.xml")).ok()?;
+    let visuals = &manifest[manifest.find("VisualElements")?..];
+    attributes.iter().find_map(|attr| resolve_asset(install_dir, attribute(visuals, attr)?))
+}
+
+/// Package assets are referenced without their scale qualifier
+/// (`Assets\Tile.png`) but stored with one (`Assets\Tile.scale-200.png`).
+/// Picks the largest file matching the reference.
+fn resolve_asset(install_dir: &Path, reference: &str) -> Option<PathBuf> {
+    let exact = install_dir.join(reference.replace('/', "\\"));
+    if exact.is_file() {
+        return Some(exact);
+    }
+    let dir = exact.parent()?;
+    let stem = exact.file_stem()?.to_string_lossy().to_lowercase();
+    let ext = exact.extension()?.to_string_lossy().to_lowercase();
+    fs::read_dir(dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            name.starts_with(&format!("{stem}.")) && name.ends_with(&format!(".{ext}")) && !name.contains("contrast")
+        })
+        .max_by_key(|entry| entry.metadata().map(|m| m.len()).unwrap_or(0))
+        .map(|entry| entry.path())
 }
 
 /// Value of `name="..."` in an XML document (enough for these configs).

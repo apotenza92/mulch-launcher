@@ -65,11 +65,12 @@ pub fn scan() -> Vec<Game> {
             install_dir: g.exe.parent().map(Path::to_path_buf),
             launch: Action::Exe {
                 working_dir: g.exe.parent().map(Path::to_path_buf),
-                path: g.exe,
+                path: g.exe.clone(),
                 args: g.args,
             },
             uninstall: None,
             art: None,
+            icon_source: Some(g.exe.clone()),
         })
         .collect()
 }

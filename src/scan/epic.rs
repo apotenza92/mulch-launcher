@@ -22,6 +22,8 @@ struct Manifest {
     app_categories: Vec<String>,
     #[serde(default)]
     compatible_apps: Vec<String>,
+    #[serde(default)]
+    launch_executable: String,
     #[serde(default, rename = "bIsIncompleteInstall")]
     is_incomplete_install: bool,
 }
@@ -81,10 +83,11 @@ pub fn scan() -> Vec<Game> {
             id: format!("epic:{}", manifest.app_name),
             name: manifest.display_name,
             platform: Platform::Epic,
-            install_dir: Some(install_dir),
+            install_dir: Some(install_dir.clone()),
             launch: Action::Uri(format!("com.epicgames.launcher://apps/{launch_id}?action=launch&silent=true")),
             uninstall: None,
             art: None,
+            icon_source: Some(install_dir.join(&manifest.launch_executable)).filter(|p| p.is_file()),
         });
     }
     games

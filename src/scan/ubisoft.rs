@@ -32,6 +32,8 @@ pub fn scan() -> Vec<Game> {
             launch: Action::Uri(format!("uplay://launch/{game_id}/0")),
             uninstall: Some(Action::Uri(format!("uplay://uninstall/{game_id}"))),
             art: None,
+            icon_source: registry::string(HKEY_LOCAL_MACHINE, &uninstall_key, "DisplayIcon")
+                .and_then(|icon| super::art::icon_path(&icon)),
         });
     }
     games

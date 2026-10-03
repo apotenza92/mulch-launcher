@@ -49,7 +49,18 @@ Detection rules for Battle.net, Rockstar, Epic filtering and Ubisoft links follo
 3. **Insanely fast.** No disk crawling. Scans run in parallel on every start.
 4. **Show what's there; don't manage it.** No database to drift out of date.
 
+## Install
+
+Run `MulchLauncher.exe` from anywhere (e.g. Downloads). First-run setup shows
+what it found, offers to add other games, and an optional taskbar pin, then
+installs itself per-user (no admin) to `%LOCALAPPDATA%\Programs\MulchLauncher`
+with a Start menu shortcut and an "Installed apps" entry. Uninstall from
+Windows Settings like any other app.
+
 ## Roadmap
+
+See [docs/nudge-updates.md](docs/nudge-updates.md) for the nudge-updates plan.
+
 
 - EA app game detection without a login
 - Nudge updates: update one game, or everything, before game night,
@@ -66,6 +77,6 @@ from the Windows SDK.
 
 ```bash
 cargo run              # the app
-cargo run -- --scan    # print every detected game and scan timings
+cargo run -- --scan    # print every detected game and scan timings (MulchLauncher.exe --scan)
 cargo test
 ```
