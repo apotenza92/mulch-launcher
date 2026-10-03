@@ -4,7 +4,7 @@
 
 use mulch_launcher::install;
 use mulch_launcher::launch;
-use mulch_launcher::layout::{COVER_ASPECT, GRID_GAP, GridLayout, fit_tiles_stable};
+use mulch_launcher::layout::{COVER_ASPECT, GRID_GAP, GridLayout, fit_tiles};
 use mulch_launcher::scan::{self, Action, Art, Game, Launcher, Platform, ScanResult, art, manual};
 use mulch_launcher::settings::Settings;
 use gpui_kit::component::button::*;
@@ -18,7 +18,6 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::Duration;
 
 const APP_NAME: &str = "MulchLauncher";
 
@@ -55,12 +54,6 @@ struct MulchApp {
     pinned_launchers: Vec<String>,
     /// Ask Windows to pin us on the next render (needs a live window).
     pin_pending: bool,
-    /// The grid layout for the current window size (recomputed every frame).
-    layout: Option<GridLayout>,
-    /// The tile width actually drawn: it eases towards the layout's width so
-    /// resizing feels smooth rather than jumpy.
-    shown_tile_width: f32,
-    animating: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -85,9 +78,6 @@ impl MulchApp {
             pin_on_finish: false,
             pinned_launchers: Vec::new(),
             pin_pending: pin_requested,
-            layout: None,
-            shown_tile_width: 0.,
-            animating: false,
             games: Vec::new(),
             launchers: Vec::new(),
             settings,
@@ -249,41 +239,6 @@ impl MulchApp {
     fn remove_manual(&mut self, exe: PathBuf, cx: &mut Context<Self>) {
         let _ = manual::remove(&exe);
         self.rescan(cx);
-    }
-
-    /// The layout for the grid's available space, recomputed every frame so
-    /// columns and sizes follow the window. The drawn tile width eases towards
-    /// the target instead of jumping.
-    fn grid_layout(&mut self, space: (f32, f32), cx: &mut Context<Self>) -> GridLayout {
-        let target = fit_tiles_stable(self.layout.as_ref(), self.games.len(), space.0, space.1);
-        self.layout = Some(target);
-        if self.shown_tile_width <= 0. {
-            self.shown_tile_width = target.tile_width;
-        }
-        if (target.tile_width - self.shown_tile_width).abs() > 0.5 && !self.animating {
-            self.animating = true;
-            cx.spawn(async move |this, cx| {
-                loop {
-                    cx.background_executor().timer(FRAME).await;
-                    let done = this.update(cx, |app, cx| {
-                        let target = app.layout.map(|l| l.tile_width).unwrap_or(app.shown_tile_width);
-                        app.shown_tile_width += (target - app.shown_tile_width) * EASING;
-                        let done = (target - app.shown_tile_width).abs() <= 0.5;
-                        if done {
-                            app.shown_tile_width = target;
-                            app.animating = false;
-                        }
-                        cx.notify();
-                        done
-                    });
-                    if done.unwrap_or(true) {
-                        break;
-                    }
-                }
-            })
-            .detach();
-        }
-        GridLayout { tile_width: self.shown_tile_width, ..target }
     }
 
     fn set_setup_step(&mut self, step: SetupStep, cx: &mut Context<Self>) {
@@ -563,10 +518,7 @@ impl MulchApp {
 }
 
 const LAUNCHER_SIZE: f32 = 36.;
-/// Tile-size easing, so columns and sizes follow the window smoothly.
-const FRAME: Duration = Duration::from_millis(16);
-/// Fraction of the remaining distance a tile's size moves each frame.
-const EASING: f32 = 0.3;
+
 /// How much of a tile's width an icon (rather than cover art) takes up.
 const ICON_SHARE: f32 = 0.6;
 const PLAY_CARD_WIDTH: f32 = 180.;
@@ -576,6 +528,8 @@ const GRID_PADDING: f32 = 20.;
 const HEADER_HEIGHT: f32 = 72.;
 /// Slack so pixel rounding never clips the last row.
 const FIT_SLACK: f32 = 8.;
+/// Width kept free on the right so a scrollbar never overlaps the last column.
+const SCROLLBAR_ROOM: f32 = 8.;
 
 /// Cover art fills the tile. Icons (already trimmed of transparent padding)
 /// sit centred at a fixed share of the tile, so they all look the same size.
@@ -666,12 +620,10 @@ fn run_action(action: &Action, name: &str, window: &mut Window, cx: &mut App) {
 impl Render for MulchApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let viewport = window.viewport_size();
-        let layout = self.grid_layout(
-            (
-                f32::from(viewport.width) - GRID_PADDING * 2.,
-                f32::from(viewport.height) - HEADER_HEIGHT - GRID_PADDING * 2. - FIT_SLACK,
-            ),
-            cx,
+        let layout = fit_tiles(
+            self.games.len(),
+            f32::from(viewport.width) - GRID_PADDING * 2. - SCROLLBAR_ROOM,
+            f32::from(viewport.height) - HEADER_HEIGHT - GRID_PADDING * 2. - FIT_SLACK,
         );
         let grid_width = layout.columns as f32 * (layout.tile_width + GRID_GAP) - GRID_GAP;
 
@@ -698,10 +650,10 @@ impl Render for MulchApp {
                     .flex_1()
                     .overflow_y_scroll()
                     .p(px(GRID_PADDING))
+                    // Tiles flow from the top left, across then down.
                     .flex()
-                    .justify_center()
-                    // Centre the grid vertically when it fits; scroll from the top when it doesn't.
-                    .when(!layout.scrolls, |this| this.items_center())
+                    .items_start()
+                    .justify_start()
                     .when(empty, |this| {
                         this.child(
                             v_flex()
