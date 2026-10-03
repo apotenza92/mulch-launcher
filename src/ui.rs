@@ -625,10 +625,18 @@ impl Render for MulchApp {
             f32::from(viewport.width) - GRID_PADDING * 2. - SCROLLBAR_ROOM,
             f32::from(viewport.height) - HEADER_HEIGHT - GRID_PADDING * 2. - FIT_SLACK,
         );
-        let grid_width = layout.columns as f32 * (layout.tile_width + GRID_GAP) - GRID_GAP;
-
         let header = self.header(cx);
-        let tiles: Vec<_> = self.games.iter().enumerate().map(|(ix, game)| self.tile(ix, game, &layout, cx)).collect();
+        // Whole-pixel tile widths, and rows built explicitly rather than by
+        // wrapping: with fractional widths, wrapping could push a row's last
+        // tile down a line on some frames and back on others while resizing.
+        let layout = GridLayout { tile_width: layout.tile_width.floor(), ..layout };
+        let mut tiles: Vec<AnyElement> =
+            self.games.iter().enumerate().map(|(ix, game)| self.tile(ix, game, &layout, cx)).collect();
+        let mut rows = Vec::new();
+        while !tiles.is_empty() {
+            let rest = tiles.split_off(layout.columns.min(tiles.len()));
+            rows.push(h_flex().items_start().gap(px(GRID_GAP)).children(std::mem::replace(&mut tiles, rest)));
+        }
         let empty = !self.scanning && self.games.is_empty();
 
         let play_card = self.pending_play.as_ref().map(|pending| self.play_card(pending, cx));
@@ -670,7 +678,7 @@ impl Render for MulchApp {
                                 ),
                         )
                     })
-                    .child(div().w(px(grid_width)).flex().flex_wrap().content_start().gap(px(GRID_GAP)).children(tiles)),
+                    .child(v_flex().gap(px(GRID_GAP)).children(rows)),
             )
     }
 }
