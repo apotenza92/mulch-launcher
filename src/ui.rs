@@ -174,6 +174,8 @@ struct PendingPlay {
     game: Game,
     /// Where the click happened; the Play button opens under it.
     at: Point<Pixels>,
+    /// "Remove" was clicked once: the next click removes.
+    confirm_remove: bool,
 }
 
 impl MulchApp {
@@ -297,7 +299,12 @@ impl MulchApp {
         }
         self.history.sort(&mut self.games);
         self.launchers = result.launchers;
-        self.launchers.sort_by_key(|l| l.name.to_lowercase());
+        // Launchers with the most games first; ties alphabetical.
+        let games_on =
+            |launcher: &Launcher| self.games.iter().filter(|g| Some(g.platform) == launcher.platform).count();
+        let mut launchers = std::mem::take(&mut self.launchers);
+        launchers.sort_by_cached_key(|l| (std::cmp::Reverse(games_on(l)), l.name.to_lowercase()));
+        self.launchers = launchers;
         self.social = result.social;
         self.scanning = false;
         self.pending_play = None;
@@ -307,7 +314,7 @@ impl MulchApp {
     /// First click on a game: show a Play button right under the cursor, so a
     /// second click (or a double-click) starts it and a stray click does nothing.
     fn request_play(&mut self, game: Game, at: Point<Pixels>, cx: &mut Context<Self>) {
-        self.pending_play = Some(PendingPlay { game, at });
+        self.pending_play = Some(PendingPlay { game, at, confirm_remove: false });
         cx.notify();
     }
 
@@ -328,7 +335,8 @@ impl MulchApp {
     fn play_card(&self, pending: &PendingPlay, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         // As wide as its longest entry needs: the full name is never cut short.
         let label = format!("Play {}", pending.game.name);
-        let longest = [label.as_str(), "Show in Microsoft Store", "Show in folder"]
+        let confirm = remove_confirm_label(&pending.game);
+        let longest = [label.as_str(), "Show in Microsoft Store", "Show in folder", confirm.as_str()]
             .iter()
             .map(|text| text_width(text, window, cx))
             .fold(0., f32::max);
@@ -350,7 +358,7 @@ impl MulchApp {
                 card_button("confirm-play", IconName::Play, label, cx)
                     .on_click(cx.listener(|app, _, window, cx| app.play_pending(window, cx))),
             )
-            .children(self.secondary_action(&pending.game, cx))
+            .children(self.show_in_launcher_entry(&pending.game, cx))
             .children(pending.game.install_dir.clone().map(|dir| {
                 card_button("show-folder", IconName::FolderOpen, "Show in folder", cx).on_click(cx.listener(
                     move |app, _, _, cx| {
@@ -358,7 +366,9 @@ impl MulchApp {
                         app.cancel_play(cx);
                     },
                 ))
-            }));
+            }))
+            // Last, so it's never hit by accident; asks again before removing.
+            .children(self.remove_entry(pending, cx));
 
         deferred(
             div()
@@ -391,7 +401,8 @@ impl MulchApp {
 
     /// "Show in <launcher>", or for games the user added (which have no
     /// launcher) the only way to take them out again.
-    fn secondary_action(&self, game: &Game, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+    /// "Show in <launcher>", for games from a launcher.
+    fn show_in_launcher_entry(&self, game: &Game, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
         if let Some(show) = game.show_in_launcher.clone() {
             let launcher = match game.platform {
                 Platform::Xbox => "Microsoft Store",
@@ -408,14 +419,31 @@ impl MulchApp {
                 ),
             );
         }
-        if let (Platform::Manual, Action::Exe { path, .. }) = (game.platform, &game.launch) {
-            let exe = path.clone();
-            return Some(
-                card_button("remove-manual", IconName::Close, "Remove", cx)
-                    .on_click(cx.listener(move |app, _, _, cx| app.remove_manual(exe.clone(), cx))),
-            );
-        }
         None
+    }
+
+    /// "Remove", for games the user added (the only way to take them out
+    /// again). The first click asks for a second to confirm.
+    fn remove_entry(&self, pending: &PendingPlay, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        let (Platform::Manual, Action::Exe { path, .. }) = (pending.game.platform, &pending.game.launch) else {
+            return None;
+        };
+        let exe = path.clone();
+        if pending.confirm_remove {
+            let danger = cx.theme().danger;
+            Some(
+                card_button("remove-manual", IconName::Close, remove_confirm_label(&pending.game), cx)
+                    .text_color(danger)
+                    .on_click(cx.listener(move |app, _, _, cx| app.remove_manual(exe.clone(), cx))),
+            )
+        } else {
+            Some(card_button("remove-manual", IconName::Close, "Remove", cx).on_click(cx.listener(|app, _, _, cx| {
+                if let Some(pending) = &mut app.pending_play {
+                    pending.confirm_remove = true;
+                    cx.notify();
+                }
+            })))
+        }
     }
 
     fn apply_art(&mut self, games: Vec<Game>, launchers: Vec<Launcher>, cx: &mut Context<Self>) {
@@ -523,7 +551,7 @@ impl MulchApp {
             .into_any_element()
     }
 
-    /// Chat apps | launchers on the left; scan again and add game on the right.
+    /// Launchers (most games first) | chat apps on the left; theme, scan again and add game on the right.
     fn toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
         let launcher_icons: Vec<AnyElement> = self
             .launchers
@@ -591,7 +619,7 @@ impl MulchApp {
             .border_color(cx.theme().border)
             .child(h_flex().flex_1().child(self.measured(
                 0,
-                h_flex().gap(px(TOOLBAR_GAP)).children(social_icons).children(divider).children(launcher_icons),
+                h_flex().gap(px(TOOLBAR_GAP)).children(launcher_icons).children(divider).children(social_icons),
             )))
             .child(self.measured(1, h_flex().gap_2().children(actions)))
             .into_any_element()
@@ -984,6 +1012,10 @@ fn text_width(text: &str, window: &Window, cx: &App) -> f32 {
     };
     let font_size = rems(0.875).to_pixels(window.rem_size());
     f32::from(window.text_system().shape_line(SharedString::from(text.to_string()), font_size, &[run], None).width)
+}
+
+fn remove_confirm_label(game: &Game) -> String {
+    format!("Click again to remove {}", game.name)
 }
 
 /// A full-width, left-aligned entry in the play card, highlighted on hover.
