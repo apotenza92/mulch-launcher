@@ -327,7 +327,7 @@ impl MulchApp {
         if let (Platform::Manual, Action::Exe { path, .. }) = (game.platform, &game.launch) {
             let exe = path.clone();
             return Some(
-                card_button("remove-manual", IconName::Close, "Remove from MulchLauncher")
+                card_button("remove-manual", IconName::Close, "Remove")
                     .on_click(cx.listener(move |app, _, _, cx| app.remove_manual(exe.clone(), cx))),
             );
         }
