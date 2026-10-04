@@ -387,6 +387,10 @@ impl MulchApp {
     /// it: at once if the user isn't using the app, otherwise as soon as they
     /// switch away. The restart reopens in the background, where it was.
     fn watch_for_updates(&self, window: &mut Window, cx: &mut Context<Self>) {
+        // The Microsoft Store updates its own copy.
+        if mulch_core::paths::is_packaged() {
+            return;
+        }
         let Some(dir) = install::install_dir().filter(|_| install::is_installed_copy()) else { return };
         mulch_update::clean_up(&dir);
         cx.spawn_in(window, async move |this, cx| {

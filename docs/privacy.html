@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MulchLauncher privacy</title>
+  <meta name="description" content="MulchLauncher's privacy policy.">
+  <link rel="icon" type="image/png" href="favicon.png">
+  <style>
+    :root { --bg: #fff6ea; --fg: #2a1a10; --muted: #7a5a44; --glow: #ffb66b; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #17100b; --fg: #fbeedd; --muted: #c8a688; --glow: #c8642c; }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 48px 16px;
+      background: radial-gradient(60rem 30rem at 50% -10%, color-mix(in srgb, var(--glow) 25%, transparent), transparent), var(--bg);
+      color: var(--fg); font: 16px/1.6 "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+    }
+    main { max-width: 42rem; margin: 0 auto; }
+    h1 { font-size: 2rem; letter-spacing: -.02em; margin: 0 0 4px; }
+    h2 { font-size: 1.2rem; margin: 32px 0 8px; }
+    p, li { color: var(--muted); }
+    code { font-size: .92em; overflow-wrap: anywhere; }
+    a { color: inherit; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>MulchLauncher privacy policy</h1>
+  <p>Last updated: 4 October 2026</p>
+  <p>MulchLauncher is a game launcher for Windows. It has no account, no sign-in, no ads, no analytics and no telemetry. It doesn't collect, sell or share personal information.</p>
+
+  <h2>What it reads on your PC</h2>
+  <p>To list your games, MulchLauncher reads the install records other launchers keep on your PC (Steam, Epic Games, Ubisoft Connect, GOG, Xbox, Battle.net, Rockstar Games and EA): their registry entries and files, and the list of installed apps. To show when you last played, it reads Windows' Game Bar records and which programs are running. It also checks whether some chat apps (such as Discord) are installed, to show a button for them.</p>
+  <p>None of this leaves your PC.</p>
+
+  <h2>What it saves</h2>
+  <p>Settings, play history, games you added yourself, and downloaded cover images are saved in <code>%LOCALAPPDATA%\MulchLauncher</code> (for the Microsoft Store version; Windows keeps this in the app's own storage). Uninstalling MulchLauncher removes it.</p>
+
+  <h2>Network requests</h2>
+  <p>For games that have no cover art on your PC, MulchLauncher looks up a poster from these public sources and saves it locally, so each is only fetched once (or retried after a week if none was found):</p>
+  <ul>
+    <li>Steam: <code>steamcommunity.com</code> (search by game name) and <code>steamcdn-a.akamaihd.net</code> (images)</li>
+    <li>Microsoft Store catalogue: <code>displaycatalog.mp.microsoft.com</code> (lookup by the Xbox game's package name) and the Microsoft image server it returns</li>
+    <li>Wikidata: <code>www.wikidata.org</code> (search by game name)</li>
+    <li>Ubisoft: <code>ubistatic3-a.akamaihd.net</code> (images)</li>
+    <li>Wikipedia: <code>en.wikipedia.org</code> (search by game name) and <code>upload.wikimedia.org</code> (images)</li>
+  </ul>
+  <p>These requests contain the game's name or its ID in that store, nothing else about you. Like any internet request, they reveal your IP address to the server, which handles it under its own privacy policy. No cookies or identifiers are sent.</p>
+  <p>The copy downloaded from GitHub (not the Microsoft Store version) also checks <code>api.github.com</code> for a newer release and downloads it from GitHub. The Microsoft Store version is updated by the Store instead.</p>
+  <p>Buttons in the app can open web pages or other apps (for example the project's GitHub page, or a game in its own launcher). Those open in your browser or in that app and are covered by their own privacy policies.</p>
+
+  <h2>Contact</h2>
+  <p>Questions: <a href="https://github.com/apotenza92/mulch-launcher/issues">github.com/apotenza92/mulch-launcher/issues</a></p>
+</main>
+</body>
+</html>
