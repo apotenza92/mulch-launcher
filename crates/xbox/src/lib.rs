@@ -7,7 +7,7 @@
 //! DLC and add-on "stub" packages also ship that config but declare no
 //! launchable app, so requiring an app entry filters them out.
 
-use super::{Action, Art, Game, Platform};
+use mulch_core::{Action, Art, Game, Launcher, Library, Platform, ScanContext};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -29,12 +29,44 @@ const NOT_GAMES: &[&str] = &[
     "Microsoft.GamingServices",
 ];
 
-pub fn scan() -> Vec<Game> {
-    // WinRT needs the thread initialised; already-initialised is fine.
+pub struct Xbox;
+
+impl Library for Xbox {
+    fn id(&self) -> &'static str {
+        "xbox"
+    }
+
+    /// The Xbox app, found as a package (it registers no link handler).
+    fn launcher(&self, _: &ScanContext) -> Option<Launcher> {
+        init_winrt();
+        let manager = PackageManager::new().ok()?;
+        let package = manager
+            .FindPackagesByUserSecurityIdPackageFamilyName(&HSTRING::new(), &HSTRING::from("Microsoft.GamingApp_8wekyb3d8bbwe"))
+            .ok()?
+            .into_iter()
+            .next()?;
+        let app_id = package.GetAppListEntries().ok()?.into_iter().find_map(|e| e.AppUserModelId().ok())?;
+        let install_dir = package.InstalledPath().ok().map(|p| PathBuf::from(p.to_string()));
+        Some(Launcher {
+            platform: Platform::Xbox,
+            name: "Xbox",
+            open: Action::StoreApp(app_id.to_string()),
+            icon: install_dir.as_deref().and_then(manifest_icon),
+            icon_source: None,
+        })
+    }
+
+    fn games(&self, _: &ScanContext) -> Vec<Game> {
+        init_winrt();
+        scan_packages().unwrap_or_default()
+    }
+}
+
+/// WinRT needs the thread initialised; already-initialised is fine.
+fn init_winrt() {
     unsafe {
         let _ = RoInitialize(RO_INIT_MULTITHREADED);
     }
-    scan_packages().unwrap_or_default()
 }
 
 /// The Xbox app installs games to `<drive>:\XboxGames\<game>\Content`, then
@@ -87,18 +119,21 @@ fn scan_packages() -> windows::core::Result<Vec<Game>> {
 
         let visible_dir = visible_folders.get(&name).cloned().unwrap_or_else(|| install_dir.clone());
 
-        games.push(Game {
-            id: format!("xbox:{}", package.Id()?.FamilyName()?),
-            name: package.DisplayName()?.to_string(),
-            platform: Platform::Xbox,
-            install_dir: Some(visible_dir),
-            launch: Action::StoreApp(app_id),
-            uninstall: None,
-            // Square logos, not posters: shown as icons until a real poster
-            // is fetched (see posters.rs).
-            art: logo(&install_dir, &config).or_else(|| manifest_logo(&install_dir)).map(Art::Icon),
-            icon_source: None,
-        });
+        let family_name = package.Id()?.FamilyName()?.to_string();
+        let mut game = Game::new(
+            format!("xbox:{family_name}"),
+            package.DisplayName()?.to_string(),
+            Platform::Xbox,
+            Some(visible_dir.clone()),
+            Action::StoreApp(app_id),
+        );
+        // The game's processes can run from either folder.
+        game.process_dirs = vec![visible_dir, install_dir.clone()];
+        game.show_in_launcher = Some(Action::Uri(format!("ms-windows-store://pdp/?PFN={family_name}")));
+        // Square logos, not posters: shown as icons until a real poster is
+        // fetched (see the posters crate).
+        game.art = logo(&install_dir, &config).or_else(|| manifest_logo(&install_dir)).map(Art::Icon);
+        games.push(game);
     }
     Ok(games)
 }

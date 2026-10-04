@@ -2,7 +2,7 @@
 //! icon, extracted by Windows' shell at the largest size available and cached
 //! as a PNG so it only costs time once per game.
 
-use super::{Art, Game, Launcher};
+use mulch_core::{Art, Game, Launcher};
 use std::collections::hash_map::DefaultHasher;
 use std::ffi::c_void;
 use std::fs;
@@ -241,11 +241,4 @@ mod tests {
         assert_eq!((w, h), (1, 1));
         assert_eq!(out[3], 255);
     }
-}
-
-/// Turns an icon reference from the registry (`"C:\game.exe",0`) into a path.
-pub fn icon_path(display_icon: &str) -> Option<PathBuf> {
-    let path = display_icon.split(',').next()?.trim().trim_matches('"');
-    let path = PathBuf::from(path);
-    path.is_file().then_some(path)
 }

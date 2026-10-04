@@ -1,0 +1,11 @@
+[package]
+name = "mulch-manual"
+version = "0.1.0"
+description = "User-added games for MulchLauncher"
+edition = "2024"
+license = "MIT"
+publish = false
+[dependencies]
+mulch-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

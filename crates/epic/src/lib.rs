@@ -1,7 +1,8 @@
-//! Epic Games Store: one JSON `.item` manifest per installed app.
+//! Epic Games Store: one JSON `.item` manifest per installed app. Epic keeps
+//! play history in your online account only, so there's no local last-played.
 
-use super::registry::{self, HKEY_LOCAL_MACHINE};
-use super::{Action, Game, Platform};
+use mulch_core::registry::{self, HKEY_LOCAL_MACHINE};
+use mulch_core::{Action, Game, Launcher, Library, Platform, ScanContext};
 use serde::Deserialize;
 use std::fs;
 use std::path::PathBuf;
@@ -28,6 +29,23 @@ struct Manifest {
     is_incomplete_install: bool,
 }
 
+pub struct Epic;
+
+impl Library for Epic {
+    fn id(&self) -> &'static str {
+        "epic"
+    }
+
+    fn launcher(&self, cx: &ScanContext) -> Option<Launcher> {
+        let exe = registry::launcher_exe(cx.uninstall_entries(), &["com.epicgames.launcher"], Some("Epic Games Launcher"))?;
+        Some(Launcher::from_exe(Platform::Epic, "Epic Games", exe))
+    }
+
+    fn games(&self, _: &ScanContext) -> Vec<Game> {
+        scan()
+    }
+}
+
 fn manifests_dir() -> Option<PathBuf> {
     // Epic records its data folder in the registry; ProgramData is the fallback.
     let from_registry = registry::string_any(
@@ -43,7 +61,7 @@ fn manifests_dir() -> Option<PathBuf> {
     [from_registry, fallback].into_iter().flatten().find(|p| p.is_dir())
 }
 
-pub fn scan() -> Vec<Game> {
+fn scan() -> Vec<Game> {
     let Some(dir) = manifests_dir() else { return Vec::new() };
     let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
     let mut games = Vec::new();
@@ -79,16 +97,18 @@ pub fn scan() -> Vec<Game> {
             "{}%3A{}%3A{}",
             manifest.catalog_namespace, manifest.catalog_item_id, manifest.app_name
         );
-        games.push(Game {
-            id: format!("epic:{}", manifest.app_name),
-            name: manifest.display_name,
-            platform: Platform::Epic,
-            install_dir: Some(install_dir.clone()),
-            launch: Action::Uri(format!("com.epicgames.launcher://apps/{launch_id}?action=launch&silent=true")),
-            uninstall: None,
-            art: None,
-            icon_source: Some(install_dir.join(&manifest.launch_executable)).filter(|p| p.is_file()),
-        });
+        let mut game = Game::new(
+            format!("epic:{}", manifest.app_name),
+            manifest.display_name,
+            Platform::Epic,
+            Some(install_dir.clone()),
+            Action::Uri(format!("com.epicgames.launcher://apps/{launch_id}?action=launch&silent=true")),
+        );
+        game.icon_source = Some(install_dir.join(&manifest.launch_executable)).filter(|p| p.is_file());
+        // Epic's documented links only open store pages by a "slug" that local
+        // data doesn't record, so this opens the Epic library instead.
+        game.show_in_launcher = Some(Action::Uri("com.epicgames.launcher://store/library".into()));
+        games.push(game);
     }
     games
 }

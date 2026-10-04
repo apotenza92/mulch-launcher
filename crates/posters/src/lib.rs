@@ -13,7 +13,7 @@
 //! Games with no poster anywhere keep their icon; the miss is remembered for
 //! a week so startup doesn't keep asking.
 
-use super::{Art, Game, Platform};
+use mulch_core::{Art, Game, Platform};
 use serde_json::Value;
 use std::collections::hash_map::DefaultHasher;
 use std::fs;

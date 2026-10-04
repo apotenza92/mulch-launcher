@@ -1,8 +1,12 @@
 //! Steam: library folders from `libraryfolders.vdf` (covers every drive),
-//! installed games from each library's `appmanifest_*.acf`.
+//! installed games from each library's `appmanifest_*.acf`, including when
+//! each was last played.
 
-use super::registry::{self, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
-use super::{Action, Art, Game, Platform, vdf};
+mod vdf;
+
+use mulch_core::registry::{self, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+use mulch_core::{Action, Art, Game, Launcher, Library, Platform, ScanContext};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -16,6 +20,23 @@ const NOT_GAMES: &[&str] = &[
 
 /// `StateFlags` bit meaning the app's files are fully installed.
 const FULLY_INSTALLED: u32 = 4;
+
+pub struct Steam;
+
+impl Library for Steam {
+    fn id(&self) -> &'static str {
+        "steam"
+    }
+
+    fn launcher(&self, cx: &ScanContext) -> Option<Launcher> {
+        let exe = registry::launcher_exe(cx.uninstall_entries(), &["steam"], Some("Steam"))?;
+        Some(Launcher::from_exe(Platform::Steam, "Steam", exe))
+    }
+
+    fn games(&self, _: &ScanContext) -> Vec<Game> {
+        scan()
+    }
+}
 
 pub fn steam_root() -> Option<PathBuf> {
     let raw = registry::string_any(
@@ -76,8 +97,35 @@ fn cover_art(root: &Path, app_id: &str) -> Option<PathBuf> {
     })
 }
 
-pub fn scan() -> Vec<Game> {
+/// Last-played times from each Steam account's `localconfig.vdf`
+/// (`UserLocalConfigStore > Software > Valve > Steam > apps > <appid> > LastPlayed`).
+/// More complete than the install manifests, which often say 0 for games
+/// played before a reinstall. With several accounts, the latest wins.
+fn account_last_played(root: &Path) -> HashMap<String, u64> {
+    let mut last_played = HashMap::new();
+    let Ok(users) = fs::read_dir(root.join("userdata")) else { return last_played };
+    for user in users.filter_map(Result::ok) {
+        let Ok(text) = fs::read_to_string(user.path().join(r"config\localconfig.vdf")) else { continue };
+        let parsed = vdf::parse(&text);
+        let apps = parsed
+            .obj("UserLocalConfigStore")
+            .and_then(|s| s.obj("Software"))
+            .and_then(|s| s.obj("Valve"))
+            .and_then(|s| s.obj("Steam"))
+            .and_then(|s| s.obj("apps"));
+        for (app_id, app) in apps.into_iter().flat_map(|apps| apps.objects()) {
+            if let Some(t) = app.str("LastPlayed").and_then(|t| t.parse::<u64>().ok()).filter(|&t| t > 0) {
+                let entry = last_played.entry(app_id.clone()).or_insert(0);
+                *entry = (*entry).max(t);
+            }
+        }
+    }
+    last_played
+}
+
+fn scan() -> Vec<Game> {
     let Some(root) = steam_root() else { return Vec::new() };
+    let account_played = account_last_played(&root);
     let mut games = Vec::new();
 
     for library in library_folders(&root) {
@@ -102,16 +150,21 @@ pub fn scan() -> Vec<Game> {
                 continue;
             }
 
-            games.push(Game {
-                id: format!("steam:{app_id}"),
-                name: title.to_string(),
-                platform: Platform::Steam,
+            let mut game = Game::new(
+                format!("steam:{app_id}"),
+                title.to_string(),
+                Platform::Steam,
                 install_dir,
-                launch: Action::Uri(format!("steam://rungameid/{app_id}")),
-                uninstall: Some(Action::Uri(format!("steam://uninstall/{app_id}"))),
-                art: cover_art(&root, app_id).map(Art::Cover),
-                icon_source: None,
-            });
+                Action::Uri(format!("steam://rungameid/{app_id}")),
+            );
+            game.uninstall = Some(Action::Uri(format!("steam://uninstall/{app_id}")));
+            game.show_in_launcher = Some(Action::Uri(format!("steam://nav/games/details/{app_id}")));
+            game.art = cover_art(&root, app_id).map(Art::Cover);
+            // Steam records when each game was last played (0 = never), both in
+            // the install manifest and per account; use whichever is later.
+            let from_manifest = app.str("LastPlayed").and_then(|t| t.parse::<u64>().ok()).filter(|&t| t > 0);
+            game.last_played = from_manifest.max(account_played.get(app_id).copied());
+            games.push(game);
         }
     }
     games

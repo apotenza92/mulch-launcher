@@ -3,8 +3,8 @@
 //! product code (used to launch it) through the list below, taken from
 //! Playnite's Battle.net library.
 
-use super::registry::{self, UninstallEntry};
-use super::{Action, Game, Platform};
+use mulch_core::registry::{self, UninstallEntry};
+use mulch_core::{Action, Game, Launcher, Library, Platform, ScanContext};
 use std::path::PathBuf;
 
 /// (product code, internal id prefix, name). Matched by prefix because ids
@@ -43,7 +43,23 @@ const PRODUCTS: &[(&str, &str, &str)] = &[
     ("AQUA", "aqua", "Avowed"),
 ];
 
-pub fn scan(entries: &[UninstallEntry]) -> Vec<Game> {
+pub struct BattleNet;
+
+impl Library for BattleNet {
+    fn id(&self) -> &'static str {
+        "battlenet"
+    }
+
+    fn launcher(&self, cx: &ScanContext) -> Option<Launcher> {
+        Some(Launcher::from_exe(Platform::BattleNet, "Battle.net", client_exe(cx.uninstall_entries())?))
+    }
+
+    fn games(&self, cx: &ScanContext) -> Vec<Game> {
+        scan(cx.uninstall_entries())
+    }
+}
+
+fn scan(entries: &[UninstallEntry]) -> Vec<Game> {
     let Some(client) = client_exe(entries) else { return Vec::new() };
     let mut games = Vec::new();
 
@@ -65,20 +81,22 @@ pub fn scan(entries: &[UninstallEntry]) -> Vec<Game> {
             continue;
         }
 
-        games.push(Game {
-            id: format!("battlenet:{code}"),
-            name: name.to_string(),
-            platform: Platform::BattleNet,
-            install_dir: Some(install_dir),
+        let mut game = Game::new(
+            format!("battlenet:{code}"),
+            name.to_string(),
+            Platform::BattleNet,
+            Some(install_dir),
             // Same form Playnite uses: `Battle.net.exe --exec="launch <code>"`.
-            launch: Action::CommandLine(format!("\"{}\" --exec=\"launch {code}\"", client.display())),
-            // Battle.net's uninstall string has quoted, spaced arguments
-            // (`--displayname="World of Warcraft"`), so run it verbatim.
-            uninstall: (!entry.uninstall_string.trim().is_empty())
-                .then(|| Action::CommandLine(entry.uninstall_string.trim().to_string())),
-            art: None,
-            icon_source: super::art::icon_path(&entry.display_icon),
-        });
+            Action::CommandLine(format!("\"{}\" --exec=\"launch {code}\"", client.display())),
+        );
+        // Battle.net's uninstall string has quoted, spaced arguments
+        // (`--displayname="World of Warcraft"`), so run it verbatim.
+        game.uninstall = (!entry.uninstall_string.trim().is_empty())
+            .then(|| Action::CommandLine(entry.uninstall_string.trim().to_string()));
+        // `battlenet://<code>` opens the game's tab in Battle.net.
+        game.show_in_launcher = Some(Action::Uri(format!("battlenet://{code}")));
+        game.icon_source = registry::icon_path(&entry.display_icon);
+        games.push(game);
     }
     games
 }

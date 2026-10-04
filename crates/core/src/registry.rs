@@ -94,6 +94,30 @@ pub fn exe_from_command(command: &str) -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
+/// A launcher's executable: from the first link handler it registers
+/// (e.g. `steam://`), or else from its Windows uninstall entry, whose
+/// `DisplayIcon` usually points straight at the exe. Never a default path.
+pub fn launcher_exe(entries: &[UninstallEntry], schemes: &[&str], uninstall_name: Option<&str>) -> Option<PathBuf> {
+    schemes.iter().find_map(|scheme| protocol_handler_exe(scheme)).or_else(|| {
+        let name = uninstall_name?;
+        entries
+            .iter()
+            .filter(|entry| entry.display_name.starts_with(name))
+            .filter_map(|entry| {
+                let icon = entry.display_icon.split(',').next().unwrap_or(&entry.display_icon);
+                exe_from_command(icon)
+            })
+            .find(|exe| !exe.file_name().is_some_and(|f| f.to_string_lossy().to_lowercase().contains("uninst")))
+    })
+}
+
+/// Turns an icon reference from the registry (`"C:\game.exe",0`) into a path.
+pub fn icon_path(display_icon: &str) -> Option<PathBuf> {
+    let path = display_icon.split(',').next()?.trim().trim_matches('"');
+    let path = clean_path(path);
+    path.is_file().then_some(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

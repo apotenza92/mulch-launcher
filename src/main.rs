@@ -22,9 +22,11 @@ fn main() {
 }
 
 /// `MulchLauncher --scan`: prints everything found and how long it took.
-/// `--scan --json` prints the full details, including launch and uninstall commands.
+/// `--scan steam epic` scans only those libraries; `--json` prints full
+/// details, including launch, uninstall and "show in launcher" commands.
 fn print_scan() {
-    let result = scan::scan_all();
+    let only: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with("--")).collect();
+    let result = scan::scan_all(&only);
     if std::env::args().any(|a| a == "--json") {
         println!("{}", serde_json::to_string_pretty(&result.games).unwrap_or_default());
         return;

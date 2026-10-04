@@ -1,0 +1,10 @@
+[package]
+name = "mulch-xbox"
+version = "0.1.0"
+description = "Xbox / Microsoft Store library for MulchLauncher"
+edition = "2024"
+license = "MIT"
+publish = false
+[dependencies]
+mulch-core = { workspace = true }
+windows = { workspace = true, features = ["ApplicationModel", "ApplicationModel_Core", "Foundation", "Foundation_Collections", "Management_Deployment", "Storage", "Win32_System_WinRT"] }

@@ -1,0 +1,9 @@
+[package]
+name = "mulch-ubisoft"
+version = "0.1.0"
+description = "Ubisoft Connect library for MulchLauncher"
+edition = "2024"
+license = "MIT"
+publish = false
+[dependencies]
+mulch-core = { workspace = true }

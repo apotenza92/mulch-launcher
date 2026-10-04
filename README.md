@@ -55,6 +55,33 @@ Posters are always shown whole, never cropped or stretched.
 Fetched posters are cached in `%LOCALAPPDATA%\MulchLauncher\posters`; games
 with no poster anywhere are only re-checked weekly. No logins or API keys.
 
+## Sort order and play history
+
+Games are sorted most recently played first; never-played games follow A-Z.
+Last played comes from the launcher where it records it locally (Steam: its
+install manifests and per-account config), and from MulchLauncher's own
+tracking for every platform: starting a game from MulchLauncher, or any of
+the game's programs running from its folder (checked every 30 seconds while
+MulchLauncher is open). Stored in `%APPDATA%\MulchLauncher\history.json`.
+Hours played aren't shown: most launchers keep them only in your online
+account.
+
+## Code layout
+
+One crate per job, each buildable and testable on its own:
+
+| Crate | Does |
+|---|---|
+| `crates/core` | Shared types (`Game`, `Action`, `Launcher`) and the `Library` trait |
+| `crates/steam`, `epic`, `ubisoft`, `gog`, `xbox`, `battlenet`, `rockstar`, `ea`, `manual` | One library each: detect its launcher, list installed games, launch / uninstall / "show in launcher" commands, last played if known |
+| `crates/art` | Icons from executables and package logos |
+| `crates/posters` | Online poster lookups |
+| `crates/history` | MulchLauncher's own last-played tracking |
+| the root package | The app: window, setup/install, settings, grid sizing |
+
+Adding a launcher means adding a crate that implements `Library` and listing
+it in `src/scan.rs`. `MulchLauncher --scan steam` scans one library on its own.
+
 ## Principles
 
 1. **Zero setup.** If a user has to configure it, it's a bug.

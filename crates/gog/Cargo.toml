@@ -1,0 +1,9 @@
+[package]
+name = "mulch-gog"
+version = "0.1.0"
+description = "GOG library for MulchLauncher"
+edition = "2024"
+license = "MIT"
+publish = false
+[dependencies]
+mulch-core = { workspace = true }

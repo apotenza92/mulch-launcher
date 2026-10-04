@@ -2,8 +2,8 @@
 //! whose command ends in `uninstall=<title id>`. Title ids from Playnite's
 //! Rockstar library.
 
-use super::registry::{self, UninstallEntry};
-use super::{Action, Game, Platform};
+use mulch_core::registry::{self, UninstallEntry};
+use mulch_core::{Action, Game, Launcher, Library, Platform, ScanContext};
 use std::path::PathBuf;
 
 const TITLES: &[(&str, &str)] = &[
@@ -24,7 +24,23 @@ const TITLES: &[(&str, &str)] = &[
     ("gta4", "Grand Theft Auto IV"),
 ];
 
-pub fn scan(entries: &[UninstallEntry]) -> Vec<Game> {
+pub struct Rockstar;
+
+impl Library for Rockstar {
+    fn id(&self) -> &'static str {
+        "rockstar"
+    }
+
+    fn launcher(&self, cx: &ScanContext) -> Option<Launcher> {
+        Some(Launcher::from_exe(Platform::Rockstar, "Rockstar Games", launcher_exe(cx.uninstall_entries())?))
+    }
+
+    fn games(&self, cx: &ScanContext) -> Vec<Game> {
+        scan(cx.uninstall_entries())
+    }
+}
+
+fn scan(entries: &[UninstallEntry]) -> Vec<Game> {
     let Some(launcher) = launcher_exe(entries) else { return Vec::new() };
     let mut games = Vec::new();
 
@@ -35,24 +51,21 @@ pub fn scan(entries: &[UninstallEntry]) -> Vec<Game> {
         if !install_dir.is_dir() {
             continue;
         }
-        games.push(Game {
-            id: format!("rockstar:{title_id}"),
-            name: name.to_string(),
-            platform: Platform::Rockstar,
-            launch: Action::Exe {
-                path: launcher.clone(),
-                args: vec!["-launchTitleInFolder".into(), install_dir.display().to_string()],
-                working_dir: None,
-            },
-            uninstall: Some(Action::Exe {
-                path: launcher.clone(),
-                args: vec!["-enableFullMode".into(), format!("-uninstall={title_id}")],
-                working_dir: None,
-            }),
-            install_dir: Some(install_dir),
-            art: None,
-            icon_source: super::art::icon_path(&entry.display_icon),
+        let launch = Action::Exe {
+            path: launcher.clone(),
+            args: vec!["-launchTitleInFolder".into(), install_dir.display().to_string()],
+            working_dir: None,
+        };
+        let mut game = Game::new(format!("rockstar:{title_id}"), name.to_string(), Platform::Rockstar, Some(install_dir), launch);
+        game.uninstall = Some(Action::Exe {
+            path: launcher.clone(),
+            args: vec!["-enableFullMode".into(), format!("-uninstall={title_id}")],
+            working_dir: None,
         });
+        // No documented link to a game's page, so this opens the launcher.
+        game.show_in_launcher = Some(Action::Exe { path: launcher.clone(), args: Vec::new(), working_dir: None });
+        game.icon_source = registry::icon_path(&entry.display_icon);
+        games.push(game);
     }
     games
 }

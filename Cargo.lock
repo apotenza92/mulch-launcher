@@ -3992,17 +3992,132 @@ dependencies = [
 ]
 
 [[package]]
+name = "mulch-art"
+version = "0.1.0"
+dependencies = [
+ "mulch-core",
+ "png 0.17.16",
+ "windows 0.61.3",
+]
+
+[[package]]
+name = "mulch-battlenet"
+version = "0.1.0"
+dependencies = [
+ "mulch-core",
+]
+
+[[package]]
+name = "mulch-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "winreg",
+]
+
+[[package]]
+name = "mulch-ea"
+version = "0.1.0"
+dependencies = [
+ "mulch-core",
+]
+
+[[package]]
+name = "mulch-epic"
+version = "0.1.0"
+dependencies = [
+ "mulch-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "mulch-gog"
+version = "0.1.0"
+dependencies = [
+ "mulch-core",
+]
+
+[[package]]
+name = "mulch-history"
+version = "0.1.0"
+dependencies = [
+ "mulch-core",
+ "serde",
+ "serde_json",
+ "windows 0.61.3",
+]
+
+[[package]]
 name = "mulch-launcher"
 version = "0.1.0"
 dependencies = [
  "gpui-kit",
- "png 0.17.16",
+ "mulch-art",
+ "mulch-battlenet",
+ "mulch-core",
+ "mulch-ea",
+ "mulch-epic",
+ "mulch-gog",
+ "mulch-history",
+ "mulch-manual",
+ "mulch-posters",
+ "mulch-rockstar",
+ "mulch-steam",
+ "mulch-ubisoft",
+ "mulch-xbox",
  "serde",
  "serde_json",
- "ureq",
  "windows 0.61.3",
  "winreg",
  "winresource",
+]
+
+[[package]]
+name = "mulch-manual"
+version = "0.1.0"
+dependencies = [
+ "mulch-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "mulch-posters"
+version = "0.1.0"
+dependencies = [
+ "mulch-core",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
+name = "mulch-rockstar"
+version = "0.1.0"
+dependencies = [
+ "mulch-core",
+]
+
+[[package]]
+name = "mulch-steam"
+version = "0.1.0"
+dependencies = [
+ "mulch-core",
+]
+
+[[package]]
+name = "mulch-ubisoft"
+version = "0.1.0"
+dependencies = [
+ "mulch-core",
+]
+
+[[package]]
+name = "mulch-xbox"
+version = "0.1.0"
+dependencies = [
+ "mulch-core",
+ "windows 0.61.3",
 ]
 
 [[package]]

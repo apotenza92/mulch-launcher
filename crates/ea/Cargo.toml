@@ -1,0 +1,9 @@
+[package]
+name = "mulch-ea"
+version = "0.1.0"
+description = "EA app library for MulchLauncher (launcher only)"
+edition = "2024"
+license = "MIT"
+publish = false
+[dependencies]
+mulch-core = { workspace = true }

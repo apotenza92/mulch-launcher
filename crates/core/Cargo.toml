@@ -1,0 +1,10 @@
+[package]
+name = "mulch-core"
+version = "0.1.0"
+description = "Shared types and the Library trait for MulchLauncher's game libraries"
+edition = "2024"
+license = "MIT"
+publish = false
+[dependencies]
+serde = { workspace = true }
+winreg = { workspace = true }

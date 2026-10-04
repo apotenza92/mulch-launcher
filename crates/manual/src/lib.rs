@@ -1,7 +1,7 @@
 //! Games the user added by pointing at an executable. Stored as JSON in
 //! `%APPDATA%\MulchLauncher\manual-games.json`.
 
-use super::{Action, Game, Platform};
+use mulch_core::{Action, Game, Launcher, Library, Platform, ScanContext};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
@@ -52,25 +52,30 @@ pub fn remove(exe: &Path) -> io::Result<()> {
     save(&games)
 }
 
-/// Manual games whose executable still exists. Missing ones are skipped (not
-/// deleted), so a game on an unplugged drive comes back when the drive does.
-pub fn scan() -> Vec<Game> {
-    load()
-        .into_iter()
-        .filter(|g| g.exe.is_file())
-        .map(|g| Game {
-            id: format!("manual:{}", g.exe.display()),
-            name: g.name,
-            platform: Platform::Manual,
-            install_dir: g.exe.parent().map(Path::to_path_buf),
-            launch: Action::Exe {
-                working_dir: g.exe.parent().map(Path::to_path_buf),
-                path: g.exe.clone(),
-                args: g.args,
-            },
-            uninstall: None,
-            art: None,
-            icon_source: Some(g.exe.clone()),
-        })
-        .collect()
+/// Games the user added. Executables that are missing (e.g. on an unplugged
+/// drive) are skipped, not deleted, so they come back when the drive does.
+pub struct Manual;
+
+impl Library for Manual {
+    fn id(&self) -> &'static str {
+        "manual"
+    }
+
+    fn launcher(&self, _: &ScanContext) -> Option<Launcher> {
+        None
+    }
+
+    fn games(&self, _: &ScanContext) -> Vec<Game> {
+        load()
+            .into_iter()
+            .filter(|g| g.exe.is_file())
+            .map(|g| {
+                let dir = g.exe.parent().map(Path::to_path_buf);
+                let launch = Action::Exe { working_dir: dir.clone(), path: g.exe.clone(), args: g.args };
+                let mut game = Game::new(format!("manual:{}", g.exe.display()), g.name, Platform::Manual, dir, launch);
+                game.icon_source = Some(g.exe);
+                game
+            })
+            .collect()
+    }
 }

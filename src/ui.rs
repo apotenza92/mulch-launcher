@@ -5,7 +5,11 @@
 use mulch_launcher::install;
 use mulch_launcher::launch;
 use mulch_launcher::layout::{COVER_ASPECT, GRID_GAP, GridLayout, fit_tiles};
-use mulch_launcher::scan::{self, Action, Art, Game, Launcher, Platform, ScanResult, art, manual, posters};
+use mulch_art as art;
+use mulch_history::{self as history, History};
+use mulch_launcher::scan::{self, Action, Art, Game, Launcher, Platform, ScanResult};
+use mulch_manual as manual;
+use mulch_posters as posters;
 use mulch_launcher::settings::Settings;
 use gpui_kit::component::button::*;
 use gpui_kit::component::checkbox::Checkbox;
@@ -35,7 +39,7 @@ pub fn run(pin_requested: bool) {
             app_id: Some(APP_NAME.into()),
             ..Default::default()
         };
-        gpui_kit::open_window(options, cx, |_, cx| cx.new(|cx| MulchApp::new(pin_requested, cx)))
+        gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| MulchApp::new(pin_requested, window, cx)))
             .expect("failed to open the window");
     });
 }
@@ -54,7 +58,13 @@ struct MulchApp {
     pinned_launchers: Vec<String>,
     /// Ask Windows to pin us on the next render (needs a live window).
     pin_pending: bool,
+    /// When each game was last played, for sorting most recent first.
+    history: History,
+    _subscriptions: Vec<Subscription>,
 }
+
+/// How often to look for running games (to record them as played).
+const PLAY_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Clone, Copy, PartialEq)]
 enum SetupStep {
@@ -70,7 +80,7 @@ struct PendingPlay {
 }
 
 impl MulchApp {
-    fn new(pin_requested: bool, cx: &mut Context<Self>) -> Self {
+    fn new(pin_requested: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let settings = Settings::load();
         let setup = (!settings.setup_done).then_some(SetupStep::Welcome);
         let mut app = Self {
@@ -83,9 +93,51 @@ impl MulchApp {
             settings,
             scanning: false,
             pending_play: None,
+            history: History::load(),
+            // Coming back to the window (e.g. after playing): re-sort so the
+            // game just played is first.
+            _subscriptions: vec![cx.observe_window_activation(window, |app, window, cx| {
+                if window.is_window_active() {
+                    app.resort(cx);
+                }
+            })],
         };
         app.rescan(cx);
+        app.watch_for_running_games(cx);
         app
+    }
+
+    /// Every so often, records any game with a process running from its
+    /// folder as played. This catches games started from their own launcher
+    /// too, on every platform.
+    fn watch_for_running_games(&self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(PLAY_CHECK_INTERVAL).await;
+                let Ok(games) = this.update(cx, |app, _| app.games.clone()) else { break };
+                let running = cx.background_spawn(async move { history::running_games(&games) }).await;
+                if running.is_empty() {
+                    continue;
+                }
+                let updated = this.update(cx, |app, _| {
+                    let now = history::now();
+                    for id in &running {
+                        app.history.record(id, now);
+                    }
+                    app.history.save();
+                });
+                if updated.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Re-sorts most recently played first (never-played games A-Z).
+    fn resort(&mut self, cx: &mut Context<Self>) {
+        self.history.sort(&mut self.games);
+        cx.notify();
     }
 
     /// Scans on a background thread so the window opens instantly, then
@@ -97,7 +149,7 @@ impl MulchApp {
         self.scanning = true;
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let result = cx.background_spawn(async move { scan::scan_all() }).await;
+            let result = cx.background_spawn(async move { scan::scan_all(&[]) }).await;
             let (mut games, mut launchers) = (result.games.clone(), result.launchers.clone());
             this.update(cx, |app, cx| app.apply(result, cx)).ok();
 
@@ -125,6 +177,7 @@ impl MulchApp {
 
     fn apply(&mut self, result: ScanResult, cx: &mut Context<Self>) {
         self.games = result.games;
+        self.history.sort(&mut self.games);
         self.launchers = result.launchers;
         self.launchers.sort_by_key(|l| l.name.to_lowercase());
         let names: Vec<&str> = self.launchers.iter().map(|l| l.name).collect();
@@ -149,6 +202,8 @@ impl MulchApp {
     fn play_pending(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(pending) = self.pending_play.take() {
             run_action(&pending.game.launch, &pending.game.name, window, cx);
+            self.history.record(&pending.game.id, history::now());
+            self.history.save();
         }
         cx.notify();
     }
@@ -576,6 +631,17 @@ fn game_menu(menu: PopupMenu, game: &Game, app: WeakEntity<MulchApp>) -> PopupMe
         play_app.update(cx, |app, cx| app.request_play(play_game.clone(), at, cx)).ok();
     }));
 
+    if let Some(show) = game.show_in_launcher.clone() {
+        let name = game.name.clone();
+        let launcher = match game.platform {
+            Platform::Xbox => "Microsoft Store",
+            Platform::Gog => "GOG Galaxy",
+            other => other.label(),
+        };
+        menu = menu.item(
+            PopupMenuItem::new(format!("Show in {launcher}")).on_click(move |_, window, cx| run_action(&show, &name, window, cx)),
+        );
+    }
     if let Some(dir) = game.install_dir.clone() {
         menu = menu.item(PopupMenuItem::new("Open folder").on_click(move |_, _, cx| cx.open_with_system(&dir)));
     }

@@ -1,0 +1,9 @@
+[package]
+name = "mulch-rockstar"
+version = "0.1.0"
+description = "Rockstar Games library for MulchLauncher"
+edition = "2024"
+license = "MIT"
+publish = false
+[dependencies]
+mulch-core = { workspace = true }
