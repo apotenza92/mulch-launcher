@@ -2,7 +2,7 @@
 
 <h1 align="center">MulchLauncher</h1>
 
-<p align="center">A game launcher that automatically finds all your games, from every launcher.</p>
+<p align="center">One launcher for all your games.</p>
 
 <p align="center"><a href="https://apotenza92.github.io/mulch-launcher/">Download</a></p>
 

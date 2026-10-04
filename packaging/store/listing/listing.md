@@ -8,11 +8,11 @@ MulchLauncher
 
 ## Short description
 
-A game launcher that automatically finds all your games, from every launcher.
+One launcher for all your games.
 
 ## Description
 
-A game launcher that automatically finds all your games, from every launcher.
+One launcher for all your games.
 
 ## Product features
 

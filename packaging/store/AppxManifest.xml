@@ -23,7 +23,7 @@
     <Application Id="MulchLauncher" Executable="MulchLauncher.exe" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
         DisplayName="MulchLauncher"
-        Description="A game launcher that automatically finds all your games, from every launcher."
+        Description="One launcher for all your games."
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">
