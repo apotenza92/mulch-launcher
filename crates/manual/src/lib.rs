@@ -15,23 +15,41 @@ pub struct ManualGame {
     pub args: Vec<String>,
 }
 
-fn store_path() -> Option<PathBuf> {
-    mulch_core::paths::data_dir().map(|d| d.join("manual-games.json"))
+fn store_in(data_dir: &Path) -> PathBuf {
+    data_dir.join("manual-games.json")
+}
+
+fn data_dir() -> io::Result<PathBuf> {
+    mulch_core::paths::data_dir().ok_or_else(|| io::Error::other("can't find MulchLauncher's folder"))
 }
 
 pub fn load() -> Vec<ManualGame> {
-    store_path()
-        .and_then(|p| fs::read_to_string(p).ok())
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default()
+    data_dir().map(|dir| load_from(&dir)).unwrap_or_default()
+}
+
+fn load_from(data_dir: &Path) -> Vec<ManualGame> {
+    fs::read_to_string(store_in(data_dir)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
 }
 
 fn save(games: &[ManualGame]) -> io::Result<()> {
-    let path = store_path().ok_or_else(|| io::Error::other("can't find MulchLauncher's folder"))?;
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir)?;
+    save_in(&data_dir()?, games)
+}
+
+fn save_in(data_dir: &Path, games: &[ManualGame]) -> io::Result<()> {
+    fs::create_dir_all(data_dir)?;
+    fs::write(store_in(data_dir), serde_json::to_string_pretty(games)?)
+}
+
+/// Adds games (exe, name) to the store in another copy's `data_dir`: used by
+/// the installer, which runs from Downloads, for the installed copy.
+pub fn add_all_in(data_dir: &Path, new: impl IntoIterator<Item = (PathBuf, String)>) -> io::Result<()> {
+    let mut games = load_from(data_dir);
+    for (exe, name) in new {
+        if !games.iter().any(|g| g.exe == exe) {
+            games.push(ManualGame { name, exe, args: Vec::new() });
+        }
     }
-    fs::write(path, serde_json::to_string_pretty(games)?)
+    save_in(data_dir, &games)
 }
 
 /// Adds an executable, named after its file. Returns false if it was already there.

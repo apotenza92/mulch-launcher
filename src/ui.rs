@@ -60,25 +60,78 @@ pub fn run_installer() {
         let options = WindowOptions {
             titlebar: Some(TitlebarOptions { title: Some(APP_NAME.into()), ..TitleBar::title_bar_options() }),
             app_owns_titlebar_drag: true,
-            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(440.), px(250.)), cx))),
+            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                None,
+                size(px(INSTALLER_WIDTH), px(INSTALLER_HEIGHT)),
+                cx,
+            ))),
             is_resizable: false,
             app_id: Some(APP_NAME.into()),
             ..Default::default()
         };
-        gpui_kit::open_window(options, cx, |_, cx| cx.new(|_| Installer { desktop: true, error: None }))
+        gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| Installer::new(window, cx)))
             .expect("failed to open the window");
     });
 }
 
+const INSTALLER_WIDTH: f32 = 440.;
+const INSTALLER_HEIGHT: f32 = 220.;
+/// Room for the "also add these games" heading, and for each game found.
+const INSTALLER_LIST_HEADING: f32 = 40.;
+const INSTALLER_LIST_ROW: f32 = 44.;
+/// Games shown before the list scrolls.
+const INSTALLER_LIST_ROWS: usize = 6;
+
+/// The install window: "Add to desktop", games found on this PC that no
+/// launcher knows about (ticked, to add along with installing), and Install.
 struct Installer {
     desktop: bool,
+    /// None while still looking.
+    found: Option<Vec<Suggestion>>,
+    selected: HashSet<PathBuf>,
     error: Option<String>,
 }
 
 impl Installer {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // Look for other games while the user decides; grow to list them.
+        cx.spawn_in(window, async move |this, cx| {
+            let found = cx
+                .background_spawn(async move {
+                    let result = scan::scan_all(&[]);
+                    let known = scan::known_folders(&result.games, result.launchers.iter().chain(&result.social));
+                    mulch_discover::find_games(&known)
+                })
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                if !found.is_empty() {
+                    let rows = found.len().min(INSTALLER_LIST_ROWS) as f32;
+                    let height = INSTALLER_HEIGHT + INSTALLER_LIST_HEADING + rows * INSTALLER_LIST_ROW;
+                    window.resize(size(px(INSTALLER_WIDTH), px(height)));
+                }
+                this.selected = found.iter().map(|s| s.exe.clone()).collect();
+                this.found = Some(found);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        Self { desktop: true, found: None, selected: HashSet::new(), error: None }
+    }
+
     fn install(&mut self, cx: &mut Context<Self>) {
+        let chosen: Vec<(PathBuf, String)> = self
+            .found
+            .iter()
+            .flatten()
+            .filter(|s| self.selected.contains(&s.exe))
+            .map(|s| (s.exe.clone(), s.name.clone()))
+            .collect();
         let result = std::env::current_exe().and_then(|download| {
             let installed = install::install(self.desktop)?;
+            if let (false, Some(dir)) = (chosen.is_empty(), installed.parent()) {
+                manual::add_all_in(&dir.join("data"), chosen)?;
+            }
             install::hand_over(&installed, &download)
         });
         match result {
@@ -95,6 +148,50 @@ impl Render for Installer {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
+        let found = match &self.found {
+            None => {
+                Some(div().text_sm().text_color(muted).child("Looking for other games on this PC…").into_any_element())
+            }
+            Some(found) if found.is_empty() => None,
+            Some(found) => Some(
+                v_flex()
+                    .gap_2()
+                    .child(div().text_sm().text_color(muted).child("Also add these games found on this PC:"))
+                    .child(
+                        v_flex()
+                            .id("found")
+                            .max_h(px(INSTALLER_LIST_ROWS as f32 * INSTALLER_LIST_ROW))
+                            .overflow_y_scroll()
+                            .gap_2()
+                            .children(found.iter().enumerate().map(|(ix, game)| {
+                                let exe = game.exe.clone();
+                                h_flex()
+                                    .gap_3()
+                                    .items_start()
+                                    .child(
+                                        Checkbox::new(("found", ix))
+                                            .checked(self.selected.contains(&game.exe))
+                                            .on_click(cx.listener(move |this, _: &bool, _, cx| {
+                                                if !this.selected.remove(&exe) {
+                                                    this.selected.insert(exe.clone());
+                                                }
+                                                cx.notify();
+                                            })),
+                                    )
+                                    .child(
+                                        v_flex().min_w_0().child(div().text_sm().child(game.name.clone())).child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(muted)
+                                                .truncate()
+                                                .child(game.exe.display().to_string()),
+                                        ),
+                                    )
+                            })),
+                    )
+                    .into_any_element(),
+            ),
+        };
         v_flex()
             .size_full()
             .bg(theme.background)
@@ -106,21 +203,13 @@ impl Render for Installer {
                     .pb_6()
                     .gap_4()
                     .child(div().text_xl().font_semibold().child(format!("Install {APP_NAME}")))
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(muted)
-                            .child("Every installed game, from every launcher. Installs just for you; it'll be in your Start menu."),
-                    )
-                    .child(
-                        Checkbox::new("desktop")
-                            .checked(self.desktop)
-                            .label("Add to desktop")
-                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                this.desktop = *checked;
-                                cx.notify();
-                            })),
-                    )
+                    .child(Checkbox::new("desktop").checked(self.desktop).label("Add to desktop").on_click(
+                        cx.listener(|this, checked: &bool, _, cx| {
+                            this.desktop = *checked;
+                            cx.notify();
+                        }),
+                    ))
+                    .children(found)
                     .children(self.error.clone().map(|error| div().text_sm().text_color(theme.danger).child(error)))
                     .child(div().flex_1())
                     .child(
@@ -134,7 +223,6 @@ impl Render for Installer {
             )
     }
 }
-
 struct MulchApp {
     games: Vec<Game>,
     launchers: Vec<Launcher>,
