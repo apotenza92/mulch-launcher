@@ -75,10 +75,10 @@ pub fn run_installer() {
 }
 
 const INSTALLER_WIDTH: f32 = 440.;
-const INSTALLER_HEIGHT: f32 = 220.;
+const INSTALLER_HEIGHT: f32 = 232.;
 /// Room for the "also add these games" heading, and for each game found.
 const INSTALLER_LIST_HEADING: f32 = 40.;
-const INSTALLER_LIST_ROW: f32 = 44.;
+const INSTALLER_LIST_ROW: f32 = 50.;
 /// Games shown before the list scrolls.
 const INSTALLER_LIST_ROWS: usize = 6;
 
@@ -149,44 +149,44 @@ impl Render for Installer {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let found = match &self.found {
-            None => {
-                Some(div().text_sm().text_color(muted).child("Looking for other games on this PC…").into_any_element())
-            }
+            None => Some(
+                div()
+                    .text_sm()
+                    .text_color(muted)
+                    .child("Looking for games that aren't in Steam, Epic or other launchers…")
+                    .into_any_element(),
+            ),
             Some(found) if found.is_empty() => None,
             Some(found) => Some(
                 v_flex()
                     .gap_2()
-                    .child(div().text_sm().text_color(muted).child("Also add these games found on this PC:"))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(muted)
+                            .child("Found these games that aren't in any launcher. Add them too?"),
+                    )
                     .child(
                         v_flex()
                             .id("found")
                             .max_h(px(INSTALLER_LIST_ROWS as f32 * INSTALLER_LIST_ROW))
                             .overflow_y_scroll()
-                            .gap_2()
                             .children(found.iter().enumerate().map(|(ix, game)| {
                                 let exe = game.exe.clone();
-                                h_flex()
-                                    .gap_3()
-                                    .items_start()
-                                    .child(
-                                        Checkbox::new(("found", ix))
-                                            .checked(self.selected.contains(&game.exe))
-                                            .on_click(cx.listener(move |this, _: &bool, _, cx| {
-                                                if !this.selected.remove(&exe) {
-                                                    this.selected.insert(exe.clone());
-                                                }
-                                                cx.notify();
-                                            })),
-                                    )
-                                    .child(
-                                        v_flex().min_w_0().child(div().text_sm().child(game.name.clone())).child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(muted)
-                                                .truncate()
-                                                .child(game.exe.display().to_string()),
-                                        ),
-                                    )
+                                let detail = game.exe.display().to_string().into();
+                                check_row(
+                                    ("found", ix),
+                                    self.selected.contains(&game.exe),
+                                    game.name.clone(),
+                                    Some(detail),
+                                    cx,
+                                )
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if !this.selected.remove(&exe) {
+                                        this.selected.insert(exe.clone());
+                                    }
+                                    cx.notify();
+                                }))
                             })),
                     )
                     .into_any_element(),
@@ -203,12 +203,12 @@ impl Render for Installer {
                     .pb_6()
                     .gap_4()
                     .child(div().text_xl().font_semibold().child(format!("Install {APP_NAME}")))
-                    .child(Checkbox::new("desktop").checked(self.desktop).label("Add to desktop").on_click(
-                        cx.listener(|this, checked: &bool, _, cx| {
-                            this.desktop = *checked;
+                    .child(check_row("desktop", self.desktop, "Add to desktop", None, cx).on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.desktop = !this.desktop;
                             cx.notify();
-                        }),
-                    ))
+                        },
+                    )))
                     .children(found)
                     .children(self.error.clone().map(|error| div().text_sm().text_color(theme.danger).child(error)))
                     .child(div().flex_1())
@@ -789,47 +789,32 @@ impl MulchApp {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let body = match &panel.suggestions {
-            None => div().text_sm().text_color(muted).child("Looking for games on this PC…").into_any_element(),
+            None => div()
+                .text_sm()
+                .text_color(muted)
+                .child("Looking for games that aren't in Steam, Epic or other launchers…")
+                .into_any_element(),
             Some(found) if found.is_empty() => div()
                 .text_sm()
                 .text_color(muted)
-                .child("No other games found. Use Browse to pick a game's .exe yourself.")
+                .child("No games found outside your launchers. Use Browse to pick a game's .exe yourself.")
                 .into_any_element(),
             Some(found) => v_flex()
                 .id("suggestions")
                 .max_h(px(320.))
                 .overflow_y_scroll()
-                .gap_3()
                 .children(found.iter().enumerate().map(|(ix, suggestion)| {
                     let exe = suggestion.exe.clone();
-                    h_flex()
-                        .gap_3()
-                        .items_start()
-                        .child(
-                            Checkbox::new(("suggestion", ix))
-                                .checked(panel.selected.contains(&suggestion.exe))
-                                .on_click(
-                                    cx.listener(move |app, _: &bool, _, cx| app.toggle_suggestion(exe.clone(), cx)),
-                                ),
-                        )
-                        .child(
-                            v_flex()
-                                .min_w_0()
-                                .child(div().text_sm().font_medium().child(suggestion.name.clone()))
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(muted)
-                                        .truncate()
-                                        .child(suggestion.exe.display().to_string()),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(muted)
-                                        .child(format!("Looks like a game: {}", suggestion.reason)),
-                                ),
-                        )
+                    let detail =
+                        format!("{}\nLooks like a game: {}", suggestion.exe.display(), suggestion.reason).into();
+                    check_row(
+                        ("suggestion", ix),
+                        panel.selected.contains(&suggestion.exe),
+                        suggestion.name.clone(),
+                        Some(detail),
+                        cx,
+                    )
+                    .on_click(cx.listener(move |app, _, _, cx| app.toggle_suggestion(exe.clone(), cx)))
                 }))
                 .into_any_element(),
         };
@@ -1104,6 +1089,36 @@ fn text_width(text: &str, window: &Window, cx: &App) -> f32 {
 
 fn remove_confirm_label(game: &Game) -> String {
     format!("Click again to remove {}", game.name)
+}
+
+/// A full-width option: a checkbox beside a title (and optional detail lines
+/// under it). The whole row is clickable and highlights on hover.
+fn check_row(
+    id: impl Into<ElementId>,
+    checked: bool,
+    title: impl Into<SharedString>,
+    detail: Option<SharedString>,
+    cx: &App,
+) -> Stateful<Div> {
+    let theme = cx.theme();
+    let (hover, muted) = (theme.list_hover, theme.muted_foreground);
+    h_flex()
+        .id(id)
+        .w_full()
+        .gap_3()
+        .px_2()
+        // The hover background reaches past the content, which lines up with the text around it.
+        .mx(px(-8.))
+        .py_1p5()
+        .rounded_md()
+        .hover(move |style| style.bg(hover))
+        .child(Checkbox::new("check").checked(checked).large())
+        .child(
+            v_flex()
+                .min_w_0()
+                .child(div().text_sm().font_medium().child(title.into()))
+                .children(detail.map(|detail| div().text_xs().text_color(muted).child(detail))),
+        )
 }
 
 /// A full-width, left-aligned entry in the play card, highlighted on hover.
