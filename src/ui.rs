@@ -252,12 +252,9 @@ struct MulchApp {
     /// The hovered poster's bounds, measured as it's laid out.
     hovered_bounds: Rc<Cell<Bounds<Pixels>>>,
     scanning: bool,
-    /// A game the user clicked, waiting for a second click on Play.
-    revealed: Option<Revealed>,
-    /// Each game's poster slide (0 down, 1 up showing actions) and hover
-    /// lift (0 resting, 1 lifted), eased over time. Kept here rather than in
-    /// element animations, so one can't restart the other.
-    slides: HashMap<String, Tween>,
+    /// The added game whose Remove button was clicked once (the next click removes).
+    confirm_remove: Option<String>,
+    /// Each game's hover lift (0 resting, 1 lifted), eased over time.
     lifts: HashMap<String, Tween>,
     /// Games being removed, fading out before they go.
     leaving: HashMap<String, Tween>,
@@ -270,8 +267,6 @@ struct MulchApp {
     first_shown: Option<std::time::Instant>,
     /// Set by an action's click, so the tile under it doesn't also react.
     action_clicked: bool,
-    /// Set by a tile's click, so the grid around it doesn't close it again.
-    tile_clicked: bool,
     /// When each game was last played, for sorting most recent first.
     history: History,
     settings: Settings,
@@ -290,13 +285,6 @@ struct AddPanel {
     selected: HashSet<PathBuf>,
 }
 
-/// A game whose poster has slid up to show its actions.
-struct Revealed {
-    game: Game,
-    /// "Remove" was clicked once: the next click removes.
-    confirm_remove: bool,
-}
-
 impl MulchApp {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut app = Self {
@@ -310,15 +298,13 @@ impl MulchApp {
             tilt: (0., 0.),
             hovered_bounds: Rc::default(),
             scanning: false,
-            revealed: None,
-            slides: HashMap::new(),
+            confirm_remove: None,
             lifts: HashMap::new(),
             leaving: HashMap::new(),
             accents: HashMap::new(),
             theme_fade: None,
             first_shown: None,
             action_clicked: false,
-            tile_clicked: false,
             history: History::load(),
             // Coming back to the window (e.g. after playing): re-sort so the
             // game just played is first.
@@ -439,107 +425,82 @@ impl MulchApp {
         self.launchers = launchers;
         self.social = result.social;
         self.scanning = false;
-        self.revealed = None;
+        self.confirm_remove = None;
         cx.notify();
-    }
-
-    /// A click on a game slides its poster up to show its actions (or back
-    /// down if it's already up); clicking another game switches to that one.
-    fn toggle_reveal(&mut self, game: &Game, cx: &mut Context<Self>) {
-        let same = self.revealed.as_ref().is_some_and(|r| r.game.id == game.id);
-        self.close_reveal(cx);
-        if !same {
-            self.revealed = Some(Revealed { game: game.clone(), confirm_remove: false });
-            Tween::go(&mut self.slides, &game.id, 1., REVEAL_DURATION);
-        }
-        cx.notify();
-    }
-
-    fn close_reveal(&mut self, cx: &mut Context<Self>) {
-        if let Some(revealed) = self.revealed.take() {
-            Tween::go(&mut self.slides, &revealed.game.id, 0., REVEAL_DURATION);
-            cx.notify();
-        }
     }
 
     fn play(&mut self, game: &Game, window: &mut Window, cx: &mut Context<Self>) {
         run_action(&game.launch, &game.name, window, cx);
         self.history.record(&game.id, history::now());
         self.history.save();
-        self.close_reveal(cx);
+        cx.notify();
     }
 
-    /// The actions behind a game's poster, and how tall they are: Play, Show
-    /// in its launcher, Show in folder, and for games the user added, Remove
-    /// (last, and asking again first).
-    fn tile_actions(&self, game: &Game, confirm_remove: bool, cx: &mut Context<Self>) -> (AnyElement, f32) {
-        let mut rows: Vec<Stateful<Div>> = Vec::new();
-        let g = game.clone();
-        rows.push(card_button("play", IconName::Play, "Play", cx).on_click(cx.listener(move |app, _, window, cx| {
-            app.action_clicked = true;
-            app.play(&g, window, cx);
-        })));
+    /// Glass buttons over a hovered poster: Play (larger, in the middle),
+    /// Show in its launcher, Show in folder, and for games the user added,
+    /// Remove (which asks again first).
+    fn poster_actions(&self, game: &Game, cx: &mut Context<Self>) -> Div {
+        let mut buttons: Vec<AnyElement> = Vec::new();
         if let Some(show) = game.show_in_launcher.clone() {
             let launcher = match game.platform {
-                Platform::Xbox => "Store",
+                Platform::Xbox => "Microsoft Store",
                 Platform::Gog => "GOG Galaxy",
                 other => other.label(),
             };
             let name = game.name.clone();
-            rows.push(
-                card_button("show-launcher", IconName::ExternalLink, format!("Show in {launcher}"), cx).on_click(
-                    cx.listener(move |app, _, window, cx| {
-                        app.action_clicked = true;
-                        run_action(&show, &name, window, cx);
-                        app.close_reveal(cx);
-                    }),
-                ),
+            let button = glass_button("show-launcher", IconName::ExternalLink, GLASS_BUTTON, false).on_click(
+                cx.listener(move |app, _, window, cx| {
+                    app.action_clicked = true;
+                    run_action(&show, &name, window, cx);
+                }),
             );
+            buttons.push(with_tooltip(button, format!("Show in {launcher}")).into_any_element());
         }
+        let g = game.clone();
+        let play = glass_button("play", IconName::Play, GLASS_PLAY_BUTTON, false).on_click(cx.listener(
+            move |app, _, window, cx| {
+                app.action_clicked = true;
+                app.play(&g, window, cx);
+            },
+        ));
+        buttons.push(with_tooltip(play, "Play").into_any_element());
         if let Some(dir) = game.install_dir.clone() {
-            rows.push(card_button("show-folder", IconName::FolderOpen, "Show in folder", cx).on_click(cx.listener(
+            let button = glass_button("show-folder", IconName::FolderOpen, GLASS_BUTTON, false).on_click(cx.listener(
                 move |app, _, _, cx| {
                     app.action_clicked = true;
                     cx.open_with_system(&dir);
-                    app.close_reveal(cx);
                 },
-            )));
+            ));
+            buttons.push(with_tooltip(button, "Show in folder").into_any_element());
         }
         if let (Platform::Manual, Action::Exe { path, .. }) = (game.platform, &game.launch) {
             let exe = path.clone();
-            let row = if confirm_remove {
-                card_button("remove", IconName::Close, "Confirm remove", cx).text_color(cx.theme().danger).on_click(
-                    cx.listener(move |app, _, _, cx| {
-                        app.action_clicked = true;
-                        app.revealed = None;
-                        app.remove_manual(exe.clone(), cx);
-                    }),
-                )
-            } else {
-                card_button("remove", IconName::Close, "Remove", cx).on_click(cx.listener(|app, _, _, cx| {
+            let id = game.id.clone();
+            let confirming = self.confirm_remove.as_deref() == Some(game.id.as_str());
+            let button = glass_button("remove", IconName::Close, GLASS_BUTTON, confirming).on_click(cx.listener(
+                move |app, _, _, cx| {
                     app.action_clicked = true;
-                    if let Some(revealed) = &mut app.revealed {
-                        revealed.confirm_remove = true;
+                    if app.confirm_remove.as_deref() == Some(id.as_str()) {
+                        app.confirm_remove = None;
+                        app.remove_manual(exe.clone(), cx);
+                    } else {
+                        app.confirm_remove = Some(id.clone());
                         cx.notify();
                     }
-                }))
-            };
-            rows.push(row);
+                },
+            ));
+            let tip = if confirming { "Click again to remove" } else { "Remove" };
+            buttons.push(with_tooltip(button, tip).into_any_element());
         }
-        let count = rows.len() as f32;
-        let height = count * CARD_BUTTON_HEIGHT + (count - 1.) * ACTIONS_GAP + ACTIONS_PADDING * 2.;
-        let panel = v_flex()
+        h_flex()
             .absolute()
-            .bottom_0()
             .left_0()
+            .bottom(px(GLASS_INSET))
             .w_full()
-            .p(px(ACTIONS_PADDING))
-            .gap(px(ACTIONS_GAP))
-            .rounded_b(px(TILE_RADIUS))
-            .bg(cx.theme().popover)
-            .children(rows)
-            .into_any_element();
-        (panel, height)
+            .justify_center()
+            .items_center()
+            .gap(px(GLASS_GAP))
+            .children(buttons)
     }
 
     fn apply_art(&mut self, games: Vec<Game>, launchers: Vec<Launcher>, cx: &mut Context<Self>) {
@@ -1015,23 +976,19 @@ impl MulchApp {
     fn tile(&self, ix: usize, game: &Game, layout: &GridLayout, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let (width, height) = (layout.tile_width, layout.tile_width * COVER_ASPECT);
 
-        // Clicked: the poster slides up to show the game's actions behind it;
-        // clicked again (or elsewhere), it slides back down.
-        let revealed = self.revealed.as_ref().filter(|r| r.game.id == game.id);
-        let slide = Tween::value(&self.slides, &game.id);
-        let actions = (slide > 0.).then(|| self.tile_actions(game, revealed.is_some_and(|r| r.confirm_remove), cx));
+        let clicked = game.clone();
+        let lift = Tween::value(&self.lifts, &game.id);
+        // Glass buttons fade in over the poster while it's hovered.
+        let actions = (lift > 0.).then(|| self.poster_actions(game, cx).opacity(lift));
         let theme = cx.theme();
-        let reveal = actions.as_ref().map_or(0., |(_, height)| *height);
         let poster = div()
             .absolute()
-            .top(px(-reveal * slide))
+            .top_0()
             .left_0()
             .size_full()
             .rounded(px(TILE_RADIUS))
             .bg(theme.muted)
             .child(artwork(game, width));
-        let clicked = game.clone();
-        let lift = Tween::value(&self.lifts, &game.id);
 
         // The full name shows on hover only when it's cut short.
         let hovered = self.hovered_tile == Some(ix);
@@ -1061,6 +1018,10 @@ impl MulchApp {
                     } else if app.hovered_tile == Some(ix) {
                         app.hovered_tile = None;
                     }
+                    // Moving away cancels a half-done remove.
+                    if !*hovered && app.confirm_remove.as_deref() == Some(id.as_str()) {
+                        app.confirm_remove = None;
+                    }
                     Tween::go(&mut app.lifts, &id, if *hovered { 1. } else { 0. }, LIFT_DURATION);
                     app.tilt = (0., 0.);
                     cx.notify();
@@ -1076,16 +1037,13 @@ impl MulchApp {
                 app.tilt = ((across * 2. - 1.).clamp(-1., 1.), (down * 2. - 1.).clamp(-1., 1.));
                 cx.notify();
             }))
-            // One click shows the actions behind the poster; a double-click plays.
+            // A double-click anywhere on the tile plays, as well as the Play button.
             .on_click(cx.listener(move |app, event: &ClickEvent, window, cx| {
-                app.tile_clicked = true;
                 if std::mem::take(&mut app.action_clicked) {
                     return;
                 }
                 if event.click_count() >= 2 {
                     app.play(&clicked, window, cx);
-                } else {
-                    app.toggle_reveal(&clicked, cx);
                 }
             }))
             .child(
@@ -1097,7 +1055,6 @@ impl MulchApp {
                     .overflow_hidden()
                     .rounded(px(TILE_RADIUS))
                     .bg(theme.muted)
-                    .children(actions.map(|(panel, _)| panel))
                     .child(poster)
                     .when(hovered, |frame| {
                         // Measure the poster, so the mouse's place on it is known.
@@ -1105,7 +1062,8 @@ impl MulchApp {
                         frame.child(canvas(move |b, _, _| bounds.set(b), |_, _, _, _| {}).absolute().size_full())
                     })
                     // A soft sheen on the side the mouse is on.
-                    .when(hovered && revealed.is_none(), |frame| frame.child(sheen(dx, dy)))
+                    .when(hovered, |frame| frame.child(sheen(dx, dy)))
+                    .children(actions)
                     // Lifts, leans toward the mouse, and casts its shadow away from it.
                     .left(px(TILT_SHIFT * dx * lift))
                     .top(px((-LIFT + TILT_SHIFT * dy) * lift))
@@ -1298,12 +1256,11 @@ const GROUP_NAMES: [&str; 3] = ["Played in the last week", "Played in the last m
 
 /// How much of a tile's width an icon (rather than cover art) takes up.
 const ICON_SHARE: f32 = 0.6;
-/// The actions behind a poster: padding, gap, and how fast the poster slides.
-const ACTIONS_PADDING: f32 = 6.;
-const ACTIONS_GAP: f32 = 2.;
-const REVEAL_DURATION: std::time::Duration = std::time::Duration::from_millis(260);
-/// Each action row.
-const CARD_BUTTON_HEIGHT: f32 = 28.;
+/// Glass buttons over a hovered poster: sizes, spacing and distance from its bottom.
+const GLASS_BUTTON: f32 = 36.;
+const GLASS_PLAY_BUTTON: f32 = 48.;
+const GLASS_GAP: f32 = 10.;
+const GLASS_INSET: f32 = 14.;
 /// Space above and below the grid.
 const GRID_PADDING: f32 = 20.;
 /// Least space either side of the grid (the window snaps to widths where it's exactly this).
@@ -1489,6 +1446,33 @@ fn text_width(text: &str, window: &Window, cx: &App) -> f32 {
     f32::from(window.text_system().shape_line(SharedString::from(text.to_string()), font_size, &[run], None).width)
 }
 
+/// A round dark-glass button with a white icon, readable over any poster.
+/// `danger` tints it red (a remove waiting to be confirmed).
+fn glass_button(id: &'static str, icon: IconName, size: f32, danger: bool) -> Stateful<Div> {
+    let fill = if danger { gpui_kit::red().opacity(0.75) } else { gpui_kit::black().opacity(0.45) };
+    let hover = if danger { gpui_kit::red().opacity(0.9) } else { gpui_kit::black().opacity(0.65) };
+    div()
+        .id(id)
+        .size(px(size))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .bg(fill)
+        .border_1()
+        .border_color(gpui_kit::white().opacity(0.35))
+        .shadow_md()
+        .text_color(gpui_kit::white())
+        .hover(move |style| style.bg(hover).border_color(gpui_kit::white().opacity(0.6)))
+        .child(Icon::new(icon).size(px(size * 0.42)))
+}
+
+/// Adds a quick tooltip (after `TOOLTIP_DELAY`).
+fn with_tooltip(element: Stateful<Div>, text: impl Into<SharedString>) -> Stateful<Div> {
+    let text: SharedString = text.into();
+    element.tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx)).tooltip_show_delay(TOOLTIP_DELAY)
+}
+
 /// A full-width option: a checkbox beside a title (and optional detail lines
 /// under it). The whole row is clickable and highlights on hover.
 fn check_row(
@@ -1519,22 +1503,6 @@ fn check_row(
         )
 }
 
-/// A full-width, left-aligned entry in the play card, highlighted on hover.
-fn card_button(id: &'static str, icon: IconName, label: impl Into<SharedString>, cx: &App) -> Stateful<Div> {
-    // A plain row rather than a kit button (which always centres its label).
-    let hover = cx.theme().list_hover;
-    h_flex()
-        .id(id)
-        .w_full()
-        .h(px(CARD_BUTTON_HEIGHT))
-        .px_2()
-        .gap_2()
-        .rounded_md()
-        .text_sm()
-        .hover(move |style| style.bg(hover))
-        .child(Icon::new(icon).small())
-        .child(label.into())
-}
 fn run_action(action: &Action, name: &str, window: &mut Window, cx: &mut App) {
     if let Err(err) = launch::run(action) {
         window.push_notification(Notification::error(format!("Couldn't start {name}: {err}")), cx);
@@ -1545,7 +1513,7 @@ impl Render for MulchApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.update_min_width(window);
         self.step_theme_fade(window, cx);
-        if Tween::tidy(&mut self.slides) | Tween::tidy(&mut self.lifts) | Tween::tidy_up(&mut self.leaving) {
+        if Tween::tidy(&mut self.lifts) | Tween::tidy_up(&mut self.leaving) {
             window.request_animation_frame();
         }
         let viewport = window.viewport_size();
@@ -1587,11 +1555,6 @@ impl Render for MulchApp {
         v_flex().relative().size_full().children(add_panel).child(title_bar).child(toolbar).child(
             div()
                 .id("library")
-                .on_click(cx.listener(|app, _, _, cx| {
-                    if !std::mem::take(&mut app.tile_clicked) {
-                        app.close_reveal(cx);
-                    }
-                }))
                 .flex_1()
                 .overflow_y_scroll()
                 // Room at the top for the floating toolbar.
