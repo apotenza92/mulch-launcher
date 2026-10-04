@@ -20,7 +20,6 @@ use mulch_launcher::layout::{
     COVER_ASPECT, GRID_GAP, GridLayout, HEADING_HEIGHT, LABEL_HEIGHT, TILE_WIDTH, grid_width, layout as grid_layout,
 };
 use mulch_launcher::scan::{self, Action, Art, Game, Launcher, Platform, ScanResult};
-use mulch_launcher::settings::{Settings, ThemeChoice};
 use mulch_manual as manual;
 use mulch_posters as posters;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -34,7 +33,7 @@ const APP_NAME: &str = "MulchLauncher";
 pub fn run() {
     gpui_kit::application().with_assets(crate::assets::Assets).run(move |cx| {
         gpui_kit::init(cx);
-        Theme::change(theme_mode(Settings::load().theme, cx.window_appearance()), None, cx);
+        Theme::change(theme_mode(cx.window_appearance()), None, cx);
         make_glassy(cx);
 
         let options = WindowOptions {
@@ -60,7 +59,7 @@ pub fn run() {
 pub fn run_installer() {
     gpui_kit::application().with_assets(crate::assets::Assets).run(move |cx| {
         gpui_kit::init(cx);
-        Theme::change(theme_mode(ThemeChoice::System, cx.window_appearance()), None, cx);
+        Theme::change(theme_mode(cx.window_appearance()), None, cx);
         make_glassy(cx);
         let options = WindowOptions {
             titlebar: Some(TitlebarOptions { title: Some(APP_NAME.into()), ..TitleBar::title_bar_options() }),
@@ -278,9 +277,6 @@ struct MulchApp {
     action_clicked: bool,
     /// When each game was last played, for sorting most recent first.
     history: History,
-    settings: Settings,
-    /// The theme button's tooltip text, shared with the tooltip so it updates on click.
-    theme_tip: Rc<Cell<&'static str>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -331,15 +327,9 @@ impl MulchApp {
             history: History::load(),
             // Coming back to the window (e.g. after playing): re-sort so the
             // game just played is first.
-            settings: Settings::load(),
-            theme_tip: Rc::default(),
             _subscriptions: vec![
-                // Follow Windows switching between light and dark, when set to.
-                cx.observe_window_appearance(window, |app, window, cx| {
-                    if app.settings.theme == ThemeChoice::System {
-                        app.fade_theme(window, cx);
-                    }
-                }),
+                // Follow Windows switching between light and dark.
+                cx.observe_window_appearance(window, |app, window, cx| app.fade_theme(window, cx)),
                 cx.observe_window_activation(window, |app, window, cx| {
                     app.active = window.is_window_active();
                     if app.active {
@@ -846,43 +836,10 @@ impl MulchApp {
             .into_any_element()
     }
 
-    /// Scan again, add a game and the theme, in the title bar's left corner.
-    /// Drawn on a layer above the title bar, which claims its own clicks
-    /// (the title bar itself is the window's drag area).
+    /// Add a game, in the title bar's left corner. (The library re-checks
+    /// itself, and the theme follows Windows.) Drawn on a layer above the title
+    /// bar, which claims its own clicks (the title bar is the drag area).
     fn title_buttons(&self, cx: &mut Context<Self>) -> AnyElement {
-        let (theme_icon, theme_tip) = match self.settings.theme {
-            ThemeChoice::System => (Icon::empty().path("mulch/monitor.svg"), "Theme: same as Windows"),
-            ThemeChoice::Light => (Icon::new(IconName::Sun), "Theme: light"),
-            ThemeChoice::Dark => (Icon::new(IconName::Moon), "Theme: dark"),
-        };
-        // Its tooltip reads the current text each frame, so it changes on click
-        // while still showing.
-        self.theme_tip.set(theme_tip);
-        let tip = self.theme_tip.clone();
-        let theme = div()
-            .id("theme-tip")
-            .child(
-                Button::new("theme")
-                    .ghost()
-                    .small()
-                    .icon(theme_icon)
-                    .on_click(cx.listener(|app, _, window, cx| app.cycle_theme(window, cx))),
-            )
-            .tooltip(move |window, cx| {
-                let tip = tip.clone();
-                Tooltip::element(move |_, _| tip.get()).build(window, cx)
-            })
-            .tooltip_show_delay(TOOLTIP_DELAY);
-        let rescan = quick_tooltip(
-            "rescan-tip",
-            "Scan again",
-            Button::new("rescan")
-                .ghost()
-                .small()
-                .icon(IconName::RefreshCw)
-                .loading(self.scanning)
-                .on_click(cx.listener(|app, _, _, cx| app.rescan(cx))),
-        );
         let add = quick_tooltip(
             "add-game-tip",
             "Add game manually",
@@ -901,27 +858,17 @@ impl MulchApp {
                 .left(px(TITLE_BUTTONS_INSET))
                 .h(px(TITLE_BAR_HEIGHT))
                 .items_center()
-                .gap_1()
-                .child(rescan)
-                .child(add)
-                .child(theme),
+                .child(add),
         )
         .into_any_element()
     }
-    /// Applies the chosen theme (for "system", whichever Windows is using).
+    /// Applies Windows' light or dark mode.
     fn apply_theme(&self, window: &mut Window, cx: &mut Context<Self>) {
-        Theme::change(theme_mode(self.settings.theme, window.appearance()), Some(window), cx);
+        Theme::change(theme_mode(window.appearance()), Some(window), cx);
         make_glassy(cx);
     }
 
-    /// The theme button: system, then light, then dark, then system again.
-    fn cycle_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.settings.theme = self.settings.theme.next();
-        self.settings.save();
-        self.fade_theme(window, cx);
-    }
-
-    /// Switches to the chosen theme, blending the colours over a moment.
+    /// Switches to Windows' current light or dark mode, blending the colours over a moment.
     fn fade_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let from = self
             .theme_fade
@@ -1472,15 +1419,11 @@ fn contrast(a: Hsla, b: Hsla) -> f32 {
     let (la, lb) = (luminance(a), luminance(b));
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
-/// The light or dark theme for a choice, given whether Windows is in dark mode.
-fn theme_mode(choice: ThemeChoice, windows: WindowAppearance) -> ThemeMode {
-    match choice {
-        ThemeChoice::Light => ThemeMode::Light,
-        ThemeChoice::Dark => ThemeMode::Dark,
-        ThemeChoice::System => match windows {
-            WindowAppearance::Dark | WindowAppearance::VibrantDark => ThemeMode::Dark,
-            _ => ThemeMode::Light,
-        },
+/// Light or dark, following Windows.
+fn theme_mode(windows: WindowAppearance) -> ThemeMode {
+    match windows {
+        WindowAppearance::Dark | WindowAppearance::VibrantDark => ThemeMode::Dark,
+        _ => ThemeMode::Light,
     }
 }
 
