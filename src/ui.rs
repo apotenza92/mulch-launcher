@@ -441,15 +441,16 @@ impl MulchApp {
     /// and the game's other action on the right: Show in its launcher, or for
     /// games the user added, Remove (which asks again first).
     fn poster_actions(&self, game: &Game, size: (f32, f32), cursor: (f32, f32), cx: &mut Context<Self>) -> Div {
+        let dark = cx.theme().mode.is_dark();
         let mut left: Option<AnyElement> = None;
         let mut right: Option<AnyElement> = None;
         if let Some(dir) = game.install_dir.clone() {
-            let button = glass_button("show-folder", IconName::FolderOpen, GLASS_BUTTON, false).on_click(cx.listener(
-                move |app, _, _, cx| {
+            let button = glass_button("show-folder", IconName::FolderOpen, GLASS_BUTTON, false, dark).on_click(
+                cx.listener(move |app, _, _, cx| {
                     app.action_clicked = true;
                     cx.open_with_system(&dir);
-                },
-            ));
+                }),
+            );
             left = Some(with_tooltip(button, "Show in folder").into_any_element());
         }
         if let Some(show) = game.show_in_launcher.clone() {
@@ -459,7 +460,7 @@ impl MulchApp {
                 other => other.label(),
             };
             let name = game.name.clone();
-            let button = glass_button("show-launcher", IconName::ExternalLink, GLASS_BUTTON, false).on_click(
+            let button = glass_button("show-launcher", IconName::ExternalLink, GLASS_BUTTON, false, dark).on_click(
                 cx.listener(move |app, _, window, cx| {
                     app.action_clicked = true;
                     run_action(&show, &name, window, cx);
@@ -470,7 +471,7 @@ impl MulchApp {
             let exe = path.clone();
             let id = game.id.clone();
             let confirming = self.confirm_remove.as_deref() == Some(game.id.as_str());
-            let button = glass_button("remove", IconName::Close, GLASS_BUTTON, confirming).on_click(cx.listener(
+            let button = glass_button("remove", IconName::Close, GLASS_BUTTON, confirming, dark).on_click(cx.listener(
                 move |app, _, _, cx| {
                     app.action_clicked = true;
                     if app.confirm_remove.as_deref() == Some(id.as_str()) {
@@ -493,7 +494,7 @@ impl MulchApp {
         let x = cursor.0.clamp(GLASS_INSET + half, width - GLASS_INSET - half);
         let y = cursor.1.clamp(GLASS_INSET + half, lowest.max(GLASS_INSET + half));
         let g = game.clone();
-        let play = glass_button("play", IconName::Play, GLASS_PLAY_BUTTON, false).on_click(cx.listener(
+        let play = glass_button("play", IconName::Play, GLASS_PLAY_BUTTON, false, dark).on_click(cx.listener(
             move |app, _, window, cx| {
                 app.action_clicked = true;
                 app.play(&g, window, cx);
@@ -1457,11 +1458,22 @@ fn text_width(text: &str, window: &Window, cx: &App) -> f32 {
     f32::from(window.text_system().shape_line(SharedString::from(text.to_string()), font_size, &[run], None).width)
 }
 
-/// A round dark-glass button with a white icon, readable over any poster.
+/// A round glass button over a poster, in the theme's style: frosted white
+/// with a dark icon in light mode, dark glass with a white icon in dark mode.
 /// `danger` tints it red (a remove waiting to be confirmed).
-fn glass_button(id: &'static str, icon: IconName, size: f32, danger: bool) -> Stateful<Div> {
-    let fill = if danger { gpui_kit::red().opacity(0.75) } else { gpui_kit::black().opacity(0.45) };
-    let hover = if danger { gpui_kit::red().opacity(0.9) } else { gpui_kit::black().opacity(0.65) };
+fn glass_button(id: &'static str, icon: IconName, size: f32, danger: bool, dark: bool) -> Stateful<Div> {
+    let (glass, ink, edge) = if dark {
+        (gpui_kit::black(), gpui_kit::white(), gpui_kit::white().opacity(0.35))
+    } else {
+        (gpui_kit::white(), gpui_kit::black().opacity(0.8), gpui_kit::black().opacity(0.12))
+    };
+    let (fill, hover, ink) = if danger {
+        (gpui_kit::red().opacity(0.75), gpui_kit::red().opacity(0.9), gpui_kit::white())
+    } else if dark {
+        (glass.opacity(0.45), glass.opacity(0.65), ink)
+    } else {
+        (glass.opacity(0.7), glass.opacity(0.9), ink)
+    };
     div()
         .id(id)
         .size(px(size))
@@ -1471,13 +1483,12 @@ fn glass_button(id: &'static str, icon: IconName, size: f32, danger: bool) -> St
         .rounded_full()
         .bg(fill)
         .border_1()
-        .border_color(gpui_kit::white().opacity(0.35))
+        .border_color(edge)
         .shadow_md()
-        .text_color(gpui_kit::white())
-        .hover(move |style| style.bg(hover).border_color(gpui_kit::white().opacity(0.6)))
+        .text_color(ink)
+        .hover(move |style| style.bg(hover))
         .child(Icon::new(icon).size(px(size * 0.42)))
 }
-
 /// Adds a quick tooltip (after `TOOLTIP_DELAY`).
 fn with_tooltip(element: Stateful<Div>, text: impl Into<SharedString>) -> Stateful<Div> {
     let text: SharedString = text.into();
