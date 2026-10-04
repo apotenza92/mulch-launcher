@@ -8,20 +8,20 @@
   <link rel="icon" type="image/png" href="favicon.png">
   <style>
     :root {
-      --bg: #f4f4f8; --fg: #16161c; --muted: #5b5b6b;
-      --from: #3f7bff; --to: #9a5cf5;
+      --bg: #fff6ea; --fg: #2a1a10; --muted: #7a5a44;
+      --from: #f7a531; --to: #e8613c; --glow: #ffb66b;
     }
     @media (prefers-color-scheme: dark) {
-      :root { --bg: #0d0d12; --fg: #f2f2f7; --muted: #a0a0b2; }
+      :root { --bg: #17100b; --fg: #fbeedd; --muted: #c8a688; --glow: #c8642c; }
     }
     * { box-sizing: border-box; }
     body {
       margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px 16px;
-      background: radial-gradient(60rem 40rem at 50% -10%, color-mix(in srgb, var(--to) 22%, transparent), transparent), var(--bg);
+      background: radial-gradient(60rem 40rem at 50% -10%, color-mix(in srgb, var(--glow) 35%, transparent), transparent), var(--bg);
       color: var(--fg); font: 16px/1.5 "Segoe UI Variable", "Segoe UI", system-ui, sans-serif; text-align: center;
     }
     main { max-width: 34rem; }
-    img { width: 128px; height: 128px; filter: drop-shadow(0 18px 30px rgba(80, 60, 200, .35)); }
+    img { width: 128px; height: 128px; filter: drop-shadow(0 18px 30px rgba(200, 100, 40, .35)); }
     h1 { margin: 20px 0 28px; font-size: clamp(2rem, 6vw, 2.75rem); letter-spacing: -.02em; }
     p { margin: 0 0 32px; color: var(--muted); font-size: 1.15rem; }
     a.download {
@@ -32,6 +32,9 @@
     }
     a.download:hover { transform: translateY(-2px) scale(1.03); box-shadow: 0 16px 36px -8px color-mix(in srgb, var(--to) 80%, transparent); }
     a.download:focus-visible { outline: 3px solid var(--from); outline-offset: 4px; }
+    a.source { display: inline-block; margin-top: 28px; color: var(--muted); opacity: .7; transition: opacity .2s, color .2s; }
+    a.source:hover, a.source:focus-visible { opacity: 1; color: var(--fg); }
+    a.source svg { width: 22px; height: 22px; display: block; }
     small { display: block; margin-top: 16px; color: var(--muted); }
   </style>
 </head>
@@ -40,6 +43,8 @@
     <img src="logo.png" alt="">
     <h1>MulchLauncher</h1>
     <a class="download" href="https://github.com/apotenza92/mulch-launcher/releases/latest/download/MulchLauncher.exe">Download</a>
-  </main>
+    <div><a class="source" href="https://github.com/apotenza92/mulch-launcher" aria-label="Source code on GitHub">
+      <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+    </a></div>  </main>
 </body>
 </html>
