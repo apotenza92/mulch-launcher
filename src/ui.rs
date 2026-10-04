@@ -4,6 +4,7 @@
 
 use gpui_kit::component::button::*;
 use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::theme::{ActiveTheme, Theme, ThemeMode};
 use gpui_kit::component::tooltip::Tooltip;
@@ -253,6 +254,9 @@ struct MulchApp {
     confirm_remove: Option<String>,
     /// Each game's hover lift (0 resting, 1 lifted), eased over time.
     lifts: HashMap<String, Tween>,
+    /// Games still waiting for their poster (being looked up or downloaded):
+    /// they show a spinner rather than a stand-in icon until it arrives.
+    art_pending: HashSet<String>,
     /// Each poster button's height (0 resting, 1 hovered, 2 pressed), springing between them.
     button_heights: HashMap<String, Tween>,
     /// Games being removed, fading out before they go.
@@ -300,6 +304,7 @@ impl MulchApp {
             scanning: false,
             confirm_remove: None,
             lifts: HashMap::new(),
+            art_pending: HashSet::new(),
             button_heights: HashMap::new(),
             leaving: HashMap::new(),
             accents: HashMap::new(),
@@ -397,7 +402,11 @@ impl MulchApp {
                     games
                 })
                 .await;
-            this.update(cx, |app, cx| app.apply_art(games, launchers, cx)).ok();
+            this.update(cx, |app, cx| {
+                app.art_pending.clear();
+                app.apply_art(games, launchers, cx);
+            })
+            .ok();
         })
         .detach();
     }
@@ -407,6 +416,9 @@ impl MulchApp {
         // after the scan), so a rescan doesn't blank every tile for a moment.
         let mut shown: HashMap<String, Art> = self.games.drain(..).filter_map(|g| Some((g.id, g.art?))).collect();
         self.games = result.games;
+        // Games with no poster yet wait for the poster lookup before showing anything.
+        self.art_pending =
+            self.games.iter().filter(|g| !matches!(g.art, Some(Art::Cover(_)))).map(|g| g.id.clone()).collect();
         if self.first_shown.is_none() && !self.games.is_empty() {
             self.first_shown = Some(std::time::Instant::now());
         }
@@ -1020,14 +1032,20 @@ impl MulchApp {
         let actions = (lift > 0.).then(|| self.poster_actions(game, (width, height), cx).opacity(lift));
 
         let theme = cx.theme();
-        let poster = div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .rounded(px(TILE_RADIUS))
-            .bg(theme.muted)
-            .child(artwork(game, width));
+        let poster = div().absolute().top_0().left_0().size_full().rounded(px(TILE_RADIUS)).bg(theme.muted).child(
+            if self.art_pending.contains(&game.id) && !matches!(game.art, Some(Art::Cover(_))) {
+                // Still looking for its poster: a spinner, not a stand-in.
+                div()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(Spinner::new().large().color(theme.muted_foreground))
+                    .into_any_element()
+            } else {
+                artwork(game, width)
+            },
+        );
 
         // The full name shows on hover only when it's cut short.
         let hovered = self.hovered_tile == Some(ix);
