@@ -8,31 +8,15 @@ MulchLauncher
 
 ## Short description
 
-A game launcher for Windows. Shows the games your other launchers installed, in one place.
+A game launcher that automatically finds all your games, from every launcher.
 
 ## Description
 
-MulchLauncher shows the games installed by Steam, Epic, Ubisoft Connect, GOG, Xbox, Battle.net, Rockstar and EA in one window, plus any you add yourself.
+A game launcher that automatically finds all your games, from every launcher.
 
-Games are found from each launcher's own records on your PC and are started through that launcher, so sign-ins, updates, cloud saves and overlays work as they normally do. Nothing needs to be set up.
+## Product features
 
-Games are grouped by when you last played them. When a game was last played comes from Steam and Windows where they record it, and from MulchLauncher itself for games started from it or running while it is open.
-
-Games that aren't from a launcher can be added by choosing their program.
-
-Games without cover art on your PC get a poster from public sources (Steam, the Microsoft Store catalogue, Ubisoft, Wikidata and Wikipedia). Posters are kept on your PC, so each is only fetched once.
-
-MulchLauncher has no account and sends no usage data. Your library, play history and settings stay on your PC.
-
-MulchLauncher is not affiliated with or endorsed by Valve, Epic Games, Ubisoft, GOG, Microsoft, Blizzard Entertainment, Rockstar Games or Electronic Arts. Steam, Epic Games, Ubisoft Connect, GOG, Xbox, Battle.net, Rockstar Games and EA are trademarks of their respective owners. Game titles and cover art belong to their publishers.
-
-## Product features (up to 20 allowed; 5 used)
-
-- Shows games from Steam, Epic, Ubisoft Connect, GOG, Xbox, Battle.net, Rockstar and EA
-- Add any other game by choosing its program
-- Games grouped by when you last played them
-- Games start through their own launcher
-- No account, no usage data; everything stays on your PC
+None.
 
 ## Search terms (7 max)
 
