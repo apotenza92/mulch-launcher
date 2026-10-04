@@ -440,6 +440,7 @@ impl MulchApp {
     /// Show in its launcher, Show in folder, and for games the user added,
     /// Remove (which asks again first).
     fn poster_actions(&self, game: &Game, cx: &mut Context<Self>) -> Div {
+        // Play in the middle; the others split evenly either side of it.
         let mut buttons: Vec<AnyElement> = Vec::new();
         if let Some(show) = game.show_in_launcher.clone() {
             let launcher = match game.platform {
@@ -463,7 +464,7 @@ impl MulchApp {
                 app.play(&g, window, cx);
             },
         ));
-        buttons.push(with_tooltip(play, "Play").into_any_element());
+        let play = with_tooltip(play, "Play");
         if let Some(dir) = game.install_dir.clone() {
             let button = glass_button("show-folder", IconName::FolderOpen, GLASS_BUTTON, false).on_click(cx.listener(
                 move |app, _, _, cx| {
@@ -492,15 +493,18 @@ impl MulchApp {
             let tip = if confirming { "Click again to remove" } else { "Remove" };
             buttons.push(with_tooltip(button, tip).into_any_element());
         }
+        let right = buttons.split_off(buttons.len().div_ceil(2));
+        let side = || h_flex().flex_1().items_center().gap(px(GLASS_GAP));
         h_flex()
             .absolute()
             .left_0()
             .bottom(px(GLASS_INSET))
             .w_full()
-            .justify_center()
             .items_center()
             .gap(px(GLASS_GAP))
-            .children(buttons)
+            .child(side().justify_end().children(buttons))
+            .child(play)
+            .child(side().justify_start().children(right))
     }
 
     fn apply_art(&mut self, games: Vec<Game>, launchers: Vec<Launcher>, cx: &mut Context<Self>) {
