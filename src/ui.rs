@@ -246,11 +246,19 @@ struct MulchApp {
     hwnd: Option<isize>,
     /// The game tile under the mouse, which shows its full name.
     hovered_tile: Option<usize>,
+    /// Where the mouse is over the hovered poster, from -1 to 1 across and
+    /// down (0, 0 is the middle), for its tilt effect.
+    tilt: (f32, f32),
+    /// The hovered poster's bounds, measured as it's laid out.
+    hovered_bounds: Rc<Cell<Bounds<Pixels>>>,
     scanning: bool,
     /// A game the user clicked, waiting for a second click on Play.
     revealed: Option<Revealed>,
-    /// The game whose poster is sliding back down (its id).
-    just_closed: Option<String>,
+    /// Each game's poster slide (0 down, 1 up showing actions) and hover
+    /// lift (0 resting, 1 lifted), eased over time. Kept here rather than in
+    /// element animations, so one can't restart the other.
+    slides: HashMap<String, Tween>,
+    lifts: HashMap<String, Tween>,
     /// Set by an action's click, so the tile under it doesn't also react.
     action_clicked: bool,
     /// Set by a tile's click, so the grid around it doesn't close it again.
@@ -290,9 +298,12 @@ impl MulchApp {
             toolbar_widths: Rc::default(),
             hwnd: None,
             hovered_tile: None,
+            tilt: (0., 0.),
+            hovered_bounds: Rc::default(),
             scanning: false,
             revealed: None,
-            just_closed: None,
+            slides: HashMap::new(),
+            lifts: HashMap::new(),
             action_clicked: false,
             tile_clicked: false,
             history: History::load(),
@@ -420,16 +431,17 @@ impl MulchApp {
     /// down if it's already up); clicking another game switches to that one.
     fn toggle_reveal(&mut self, game: &Game, cx: &mut Context<Self>) {
         let same = self.revealed.as_ref().is_some_and(|r| r.game.id == game.id);
-        self.just_closed = self.revealed.take().map(|r| r.game.id);
+        self.close_reveal(cx);
         if !same {
             self.revealed = Some(Revealed { game: game.clone(), confirm_remove: false });
+            Tween::go(&mut self.slides, &game.id, 1., REVEAL_DURATION);
         }
         cx.notify();
     }
 
     fn close_reveal(&mut self, cx: &mut Context<Self>) {
         if let Some(revealed) = self.revealed.take() {
-            self.just_closed = Some(revealed.game.id);
+            Tween::go(&mut self.slides, &revealed.game.id, 0., REVEAL_DURATION);
             cx.notify();
         }
     }
@@ -507,6 +519,7 @@ impl MulchApp {
             .w_full()
             .p(px(ACTIONS_PADDING))
             .gap(px(ACTIONS_GAP))
+            .rounded_b(px(TILE_RADIUS))
             .bg(cx.theme().popover)
             .children(rows)
             .into_any_element();
@@ -675,20 +688,36 @@ impl MulchApp {
             .into_any_element(),
         ];
 
-        let divider = (!social_icons.is_empty() && !launcher_icons.is_empty())
-            .then(|| div().w(px(1.)).h(px(LAUNCHER_SIZE - 10.)).bg(cx.theme().border));
-
-        h_flex()
-            .flex_shrink_0()
+        let theme = cx.theme();
+        // A floating glass pill over the grid, which scrolls underneath it.
+        // Groups are told apart by a wider gap rather than dividers.
+        let pill = h_flex()
+            .absolute()
+            .top(px(TITLE_BAR_HEIGHT + PILL_GAP))
+            .left(px(GRID_MARGIN_X))
+            .right(px(GRID_MARGIN_X))
             .h(px(TOOLBAR_HEIGHT))
             .px(px(TOOLBAR_PADDING))
             .gap(px(TOOLBAR_GAP))
-            .child(h_flex().flex_1().child(self.measured(
-                0,
-                h_flex().gap(px(TOOLBAR_GAP)).children(launcher_icons).children(divider).children(social_icons),
-            )))
-            .child(self.measured(1, h_flex().gap_2().children(actions)))
-            .into_any_element()
+            .rounded_full()
+            // Solid enough that its icons stay clear over posters scrolling underneath.
+            .bg(with_alpha(theme.popover, PILL_OPACITY))
+            .border_1()
+            .border_color(theme.border.opacity(0.6))
+            .shadow_lg()
+            .child(
+                h_flex().flex_1().child(
+                    self.measured(
+                        0,
+                        h_flex()
+                            .gap(px(TOOLBAR_GAP))
+                            .children(launcher_icons)
+                            .child(h_flex().ml(px(TOOLBAR_GAP)).gap(px(TOOLBAR_GAP)).children(social_icons)),
+                    ),
+                ),
+            )
+            .child(self.measured(1, h_flex().gap_2().children(actions)));
+        deferred(pill).into_any_element()
     }
     /// A toolbar group at its natural width, recording that width (in slot
     /// `ix`) each time it's laid out.
@@ -725,7 +754,11 @@ impl MulchApp {
 
     /// The narrowest the window can be with the whole toolbar still showing.
     fn toolbar_min_width(&self) -> f32 {
-        TOOLBAR_PADDING * 2. + TOOLBAR_GAP + self.toolbar_widths[0].get() + self.toolbar_widths[1].get()
+        GRID_MARGIN_X * 2.
+            + TOOLBAR_PADDING * 2.
+            + TOOLBAR_GAP
+            + self.toolbar_widths[0].get()
+            + self.toolbar_widths[1].get()
     }
 
     /// How many games were played in the last week, the last month (but not
@@ -813,7 +846,7 @@ impl MulchApp {
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(theme.background.opacity(0.85))
+                .bg(with_alpha(theme.background, 0.85))
                 .child(
                     v_flex()
                         .w(px(520.))
@@ -882,36 +915,51 @@ impl MulchApp {
         // Clicked: the poster slides up to show the game's actions behind it;
         // clicked again (or elsewhere), it slides back down.
         let revealed = self.revealed.as_ref().filter(|r| r.game.id == game.id);
-        let closing = revealed.is_none() && self.just_closed.as_deref() == Some(game.id.as_str());
-        let actions = (revealed.is_some() || closing)
-            .then(|| self.tile_actions(game, revealed.is_some_and(|r| r.confirm_remove), cx));
+        let slide = Tween::value(&self.slides, &game.id);
+        let actions = (slide > 0.).then(|| self.tile_actions(game, revealed.is_some_and(|r| r.confirm_remove), cx));
         let theme = cx.theme();
         let reveal = actions.as_ref().map_or(0., |(_, height)| *height);
-        let slide = Animation::new(REVEAL_DURATION).with_easing(ease_out_quint());
-        let poster = div().absolute().top_0().left_0().size_full().bg(theme.muted).child(artwork(game, width));
-        let poster = if revealed.is_some() {
-            poster.with_animation(("reveal", ix), slide, move |p, t| p.top(px(-reveal * t))).into_any_element()
-        } else if closing {
-            poster.with_animation(("unreveal", ix), slide, move |p, t| p.top(px(-reveal * (1. - t)))).into_any_element()
-        } else {
-            poster.into_any_element()
-        };
+        let poster = div()
+            .absolute()
+            .top(px(-reveal * slide))
+            .left_0()
+            .size_full()
+            .rounded(px(TILE_RADIUS))
+            .bg(theme.muted)
+            .child(artwork(game, width));
         let clicked = game.clone();
+        let lift = Tween::value(&self.lifts, &game.id);
 
         // The full name shows on hover only when it's cut short.
         let hovered = self.hovered_tile == Some(ix);
+        let (dx, dy) = if hovered { self.tilt } else { (0., 0.) };
         let show_full_name = hovered && name_is_cut_short(&game.name, width, window, cx);
         let glow = if theme.mode.is_dark() { gpui_kit::white().opacity(0.25) } else { gpui_kit::black().opacity(0.35) };
         div()
             .id(("game", ix))
             .relative()
             .w(px(width))
-            .on_hover(cx.listener(move |app, hovered: &bool, _, cx| {
-                if *hovered {
-                    app.hovered_tile = Some(ix);
-                } else if app.hovered_tile == Some(ix) {
-                    app.hovered_tile = None;
+            .on_hover({
+                let id = game.id.clone();
+                cx.listener(move |app, hovered: &bool, _, cx| {
+                    if *hovered {
+                        app.hovered_tile = Some(ix);
+                    } else if app.hovered_tile == Some(ix) {
+                        app.hovered_tile = None;
+                    }
+                    Tween::go(&mut app.lifts, &id, if *hovered { 1. } else { 0. }, LIFT_DURATION);
+                    app.tilt = (0., 0.);
+                    cx.notify();
+                })
+            })
+            .on_mouse_move(cx.listener(move |app, event: &MouseMoveEvent, _, cx| {
+                let bounds = app.hovered_bounds.get();
+                if app.hovered_tile != Some(ix) || bounds.size.width <= px(0.) {
+                    return;
                 }
+                let across = (event.position.x - bounds.origin.x) / bounds.size.width;
+                let down = (event.position.y - bounds.origin.y) / bounds.size.height;
+                app.tilt = ((across * 2. - 1.).clamp(-1., 1.), (down * 2. - 1.).clamp(-1., 1.));
                 cx.notify();
             }))
             // One click shows the actions behind the poster; a double-click plays.
@@ -933,23 +981,27 @@ impl MulchApp {
                     .w(px(width))
                     .h(px(height))
                     .overflow_hidden()
+                    .rounded(px(TILE_RADIUS))
                     .bg(theme.muted)
                     .children(actions.map(|(panel, _)| panel))
                     .child(poster)
-                    .with_animation(
-                        if hovered { ("lift", ix) } else { ("settle", ix) },
-                        Animation::new(LIFT_DURATION).with_easing(ease_out_quint()),
-                        move |poster, t| {
-                            let lift = if hovered { t } else { 1. - t };
-                            poster.top(px(-LIFT * lift)).shadow(vec![BoxShadow {
-                                color: glow.opacity(glow.a * lift),
-                                offset: point(px(0.), px(8. * lift)),
-                                blur_radius: px(24. * lift),
-                                spread_radius: px(0.),
-                                inset: false,
-                            }])
-                        },
-                    ),
+                    .when(hovered, |frame| {
+                        // Measure the poster, so the mouse's place on it is known.
+                        let bounds = self.hovered_bounds.clone();
+                        frame.child(canvas(move |b, _, _| bounds.set(b), |_, _, _, _| {}).absolute().size_full())
+                    })
+                    // A soft sheen on the side the mouse is on.
+                    .when(hovered && revealed.is_none(), |frame| frame.child(sheen(dx, dy)))
+                    // Lifts, leans toward the mouse, and casts its shadow away from it.
+                    .left(px(TILT_SHIFT * dx * lift))
+                    .top(px((-LIFT + TILT_SHIFT * dy) * lift))
+                    .shadow(vec![BoxShadow {
+                        color: glow.opacity(lift),
+                        offset: point(px(-TILT_SHADOW * dx * lift), px((8. - TILT_SHADOW * dy) * lift)),
+                        blur_radius: px(24. * lift),
+                        spread_radius: px(0.),
+                        inset: false,
+                    }]),
             )
             .child(
                 // One line, cut short with "…"; hovering one that's cut short
@@ -975,7 +1027,8 @@ impl MulchApp {
                                     .py(px(NAME_PILL_PADDING.1))
                                     .whitespace_nowrap()
                                     .rounded_full()
-                                    .bg(theme.popover)
+                                    // Solid, so the cut-short name underneath doesn't show through.
+                                    .bg(with_alpha(theme.popover, 1.))
                                     .border_1()
                                     .border_color(theme.border)
                                     .shadow_md()
@@ -995,6 +1048,63 @@ impl MulchApp {
 }
 
 const LAUNCHER_SIZE: f32 = 36.;
+/// A value easing from where it was toward a target (0 to 1).
+#[derive(Clone, Copy)]
+struct Tween {
+    from: f32,
+    to: f32,
+    since: std::time::Instant,
+    duration: std::time::Duration,
+}
+
+impl Tween {
+    fn now(&self) -> f32 {
+        let t = (self.since.elapsed().as_secs_f32() / self.duration.as_secs_f32()).min(1.);
+        self.from + (self.to - self.from) * ease_out_quint()(t)
+    }
+
+    fn done(&self) -> bool {
+        self.since.elapsed() >= self.duration
+    }
+
+    /// The value for `id` (0 if it has none).
+    fn value(tweens: &HashMap<String, Tween>, id: &str) -> f32 {
+        tweens.get(id).map_or(0., Tween::now)
+    }
+
+    /// Starts easing `id` toward `to` from wherever it is now.
+    fn go(tweens: &mut HashMap<String, Tween>, id: &str, to: f32, duration: std::time::Duration) {
+        let from = Tween::value(tweens, id);
+        tweens.insert(id.to_string(), Tween { from, to, since: std::time::Instant::now(), duration });
+    }
+
+    /// Forgets finished tweens resting at 0; returns whether any are still moving.
+    fn tidy(tweens: &mut HashMap<String, Tween>) -> bool {
+        tweens.retain(|_, t| !(t.done() && t.to == 0.));
+        tweens.values().any(|t| !t.done())
+    }
+}
+
+/// Corner rounding for posters, panels and cards.
+const TILE_RADIUS: f32 = 8.;
+
+/// How far a hovered poster leans toward the mouse, and its shadow away.
+const TILT_SHIFT: f32 = 3.;
+const TILT_SHADOW: f32 = 6.;
+
+/// A light sheen over a hovered poster, brightest on the side the mouse is
+/// on (`dx`, `dy` from -1 to 1), stronger toward the edges.
+fn sheen(dx: f32, dy: f32) -> Div {
+    // CSS-style angle of the direction away from the mouse.
+    let angle = (-dx).atan2(dy).to_degrees();
+    let strength = 0.08 + 0.14 * (dx * dx + dy * dy).sqrt().min(1.);
+    div().absolute().top_0().left_0().size_full().rounded(px(TILE_RADIUS)).bg(linear_gradient(
+        angle,
+        linear_color_stop(gpui_kit::white().opacity(strength), 0.),
+        linear_color_stop(gpui_kit::white().opacity(0.), 0.6),
+    ))
+}
+
 /// How far a hovered poster lifts, and how quickly.
 const LIFT: f32 = 4.;
 const LIFT_DURATION: std::time::Duration = std::time::Duration::from_millis(180);
@@ -1037,6 +1147,11 @@ const GRID_MARGIN_X: f32 = 24.;
 const TITLE_BAR_HEIGHT: f32 = 34.;
 /// The toolbar under the title bar.
 const TOOLBAR_HEIGHT: f32 = 52.;
+/// Space around the floating toolbar (chosen so it takes the same room as
+/// the grid's top padding did).
+const PILL_GAP: f32 = GRID_PADDING / 2.;
+/// The floating toolbar's least opacity.
+const PILL_OPACITY: f32 = 0.85;
 const TOOLBAR_PADDING: f32 = 16.;
 const TOOLBAR_GAP: f32 = 16.;
 /// The window is never narrower than this, even with a short toolbar.
@@ -1056,7 +1171,7 @@ fn make_glassy(cx: &mut App) {
     let worst = if theme.mode.is_dark() { gpui_kit::white() } else { gpui_kit::black() };
     let foreground = theme.colors.foreground;
 
-    let tint = theme.colors.background.opacity(1.);
+    let tint = with_alpha(theme.colors.background, 1.);
     let alpha = glass_alpha(foreground, tint, worst, TEXT_CONTRAST);
     let background = tint.opacity(alpha);
     theme.colors.background = background;
@@ -1064,8 +1179,13 @@ fn make_glassy(cx: &mut App) {
     theme.colors.title_bar = gpui_kit::transparent_black();
     theme.colors.muted_foreground = secondary_text(foreground, tint, over(tint, alpha, worst));
 
-    let popover = theme.colors.popover.opacity(1.);
+    let popover = with_alpha(theme.colors.popover, 1.);
     theme.colors.popover = popover.opacity(glass_alpha(foreground, popover, worst, TEXT_CONTRAST));
+}
+
+/// color at exactly lpha (gpui's opacity multiplies the existing alpha instead).
+fn with_alpha(color: Hsla, alpha: f32) -> Hsla {
+    Hsla { a: alpha, ..color }
 }
 
 /// Body text contrast (WCAG AAA), and secondary text (AA).
@@ -1145,7 +1265,9 @@ fn default_window_size(cx: &App) -> gpui_kit::Size<Pixels> {
 fn artwork(game: &Game, width: f32) -> AnyElement {
     match &game.art {
         // Shown whole: scaled to fit inside the tile, never cropped or stretched.
-        Some(Art::Cover(path)) => img(path.clone()).size_full().object_fit(ObjectFit::Contain).into_any_element(),
+        Some(Art::Cover(path)) => {
+            img(path.clone()).size_full().rounded(px(TILE_RADIUS)).object_fit(ObjectFit::Contain).into_any_element()
+        }
         Some(Art::Icon(path)) => div()
             .size_full()
             .flex()
@@ -1257,6 +1379,9 @@ fn run_action(action: &Action, name: &str, window: &mut Window, cx: &mut App) {
 impl Render for MulchApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.update_min_width(window);
+        if Tween::tidy(&mut self.slides) | Tween::tidy(&mut self.lifts) {
+            window.request_animation_frame();
+        }
         let viewport = window.viewport_size();
         let layout = grid_layout(&self.recency_groups(), f32::from(viewport.width) - GRID_MARGIN_X * 2.);
         let title_bar = self.title_bar(cx);
@@ -1303,7 +1428,9 @@ impl Render for MulchApp {
                 }))
                 .flex_1()
                 .overflow_y_scroll()
-                .py(px(GRID_PADDING))
+                // Room at the top for the floating toolbar.
+                .pt(px(PILL_GAP * 2. + TOOLBAR_HEIGHT))
+                .pb(px(GRID_PADDING))
                 .px(px(GRID_MARGIN_X))
                 // Played in the last week, then the last month, then the rest.
                 // The grid is centred (exactly, given the window's snapped widths).
