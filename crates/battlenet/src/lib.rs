@@ -89,10 +89,6 @@ fn scan(entries: &[UninstallEntry]) -> Vec<Game> {
             // Same form Playnite uses: `Battle.net.exe --exec="launch <code>"`.
             Action::CommandLine(format!("\"{}\" --exec=\"launch {code}\"", client.display())),
         );
-        // Battle.net's uninstall string has quoted, spaced arguments
-        // (`--displayname="World of Warcraft"`), so run it verbatim.
-        game.uninstall = (!entry.uninstall_string.trim().is_empty())
-            .then(|| Action::CommandLine(entry.uninstall_string.trim().to_string()));
         // `battlenet://<code>` opens the game's tab in Battle.net.
         game.show_in_launcher = Some(Action::Uri(format!("battlenet://{code}")));
         game.icon_source = registry::icon_path(&entry.display_icon);

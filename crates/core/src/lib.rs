@@ -2,7 +2,7 @@
 //!
 //! Each launcher (Steam, Epic, Xbox, ...) lives in its own crate and implements
 //! [`Library`]: detect its launcher, list its installed games, and say how to
-//! launch, uninstall and show each one. The app just runs every library.
+//! launch and show each one. The app just runs every library.
 //!
 //! Every location must come from the launcher's own records (registry,
 //! manifests, Windows' package database) so games on any drive or custom
@@ -44,7 +44,7 @@ impl Platform {
     }
 }
 
-/// How to start (or uninstall, or show) something.
+/// How to start (or show) something.
 #[derive(Clone, Debug, Serialize)]
 pub enum Action {
     /// A URI handled by a launcher, e.g. `steam://rungameid/730`.
@@ -53,8 +53,8 @@ pub enum Action {
     Exe { path: PathBuf, args: Vec<String>, working_dir: Option<PathBuf> },
     /// A Microsoft Store / Xbox app, by its AppUserModelId.
     StoreApp(String),
-    /// A complete command line, run exactly as written (e.g. an uninstall
-    /// string from the registry, whose quoting must be kept intact).
+    /// A complete command line, run exactly as written, with its quoting
+    /// kept intact.
     CommandLine(String),
 }
 
@@ -70,7 +70,6 @@ pub struct Game {
     /// the install folder; Xbox games also run from their WindowsApps folder.
     pub process_dirs: Vec<PathBuf>,
     pub launch: Action,
-    pub uninstall: Option<Action>,
     /// Opens the game's page (or at least the library) in its own launcher.
     pub show_in_launcher: Option<Action>,
     pub art: Option<Art>,
@@ -90,7 +89,6 @@ impl Game {
             platform,
             install_dir,
             launch,
-            uninstall: None,
             show_in_launcher: None,
             art: None,
             icon_source: None,

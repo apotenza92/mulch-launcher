@@ -47,7 +47,6 @@ impl Library for Ubisoft {
                 Some(install_dir),
                 Action::Uri(format!("uplay://launch/{game_id}/0")),
             );
-            game.uninstall = Some(Action::Uri(format!("uplay://uninstall/{game_id}")));
             game.show_in_launcher = show.clone();
             game.icon_source = registry::string(HKEY_LOCAL_MACHINE, &uninstall_key, "DisplayIcon")
                 .and_then(|icon| registry::icon_path(&icon));

@@ -13,7 +13,6 @@ use mulch_posters as posters;
 use mulch_launcher::settings::Settings;
 use gpui_kit::component::button::*;
 use gpui_kit::component::checkbox::Checkbox;
-use gpui_kit::component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::theme::{ActiveTheme, Theme, ThemeMode};
 use gpui_kit::component::tooltip::Tooltip;
@@ -33,7 +32,11 @@ pub fn run(pin_requested: bool) {
         Theme::change(ThemeMode::Dark, None, cx);
 
         let options = WindowOptions {
-            titlebar: Some(TitlebarOptions { title: Some(APP_NAME.into()), ..Default::default() }),
+            // Our own title bar (see `header`): the launcher icons and buttons
+            // live in it, with slim window controls on the right. The title
+            // is still set for the taskbar and Alt+Tab.
+            titlebar: Some(TitlebarOptions { title: Some(APP_NAME.into()), ..TitleBar::title_bar_options() }),
+            app_owns_titlebar_drag: true,
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(1240.), px(820.)), cx))),
             window_min_size: Some(size(px(480.), px(360.))),
             app_id: Some(APP_NAME.into()),
@@ -230,15 +233,15 @@ impl MulchApp {
                     .label("Play")
                     .on_click(cx.listener(|app, _, window, cx| app.play_pending(window, cx))),
             )
-            .child(div().text_sm().font_medium().truncate().child(pending.game.name.clone()))
-            .child(div().text_xs().text_color(theme.muted_foreground).child(format!("via {}", pending.game.platform.label())))
-            .child(
-                Button::new("cancel-play")
-                    .ghost()
-                    .xsmall()
-                    .label("Cancel")
-                    .on_click(cx.listener(|app, _, _, cx| app.cancel_play(cx))),
-            );
+            .children(self.secondary_action(&pending.game, cx))
+            .children(pending.game.install_dir.clone().map(|dir| {
+                card_button("show-folder", IconName::FolderOpen, "Show in folder").on_click(cx.listener(
+                    move |app, _, _, cx| {
+                        cx.open_with_system(&dir);
+                        app.cancel_play(cx);
+                    },
+                ))
+            }));
 
         deferred(
             div()
@@ -265,6 +268,33 @@ impl MulchApp {
         )
         .with_priority(2)
         .into_any_element()
+    }
+
+    /// "Show in <launcher>", or for games the user added (which have no
+    /// launcher) the only way to take them out again.
+    fn secondary_action(&self, game: &Game, cx: &mut Context<Self>) -> Option<Button> {
+        if let Some(show) = game.show_in_launcher.clone() {
+            let launcher = match game.platform {
+                Platform::Xbox => "Microsoft Store",
+                Platform::Gog => "GOG Galaxy",
+                other => other.label(),
+            };
+            let name = game.name.clone();
+            return Some(card_button("show-launcher", IconName::ExternalLink, format!("Show in {launcher}")).on_click(
+                cx.listener(move |app, _, window, cx| {
+                    run_action(&show, &name, window, cx);
+                    app.cancel_play(cx);
+                }),
+            ));
+        }
+        if let (Platform::Manual, Action::Exe { path, .. }) = (game.platform, &game.launch) {
+            let exe = path.clone();
+            return Some(
+                card_button("remove-manual", IconName::Close, "Remove from MulchLauncher")
+                    .on_click(cx.listener(move |app, _, _, cx| app.remove_manual(exe.clone(), cx))),
+            );
+        }
+        None
     }
 
     fn apply_art(&mut self, games: Vec<Game>, launchers: Vec<Launcher>, cx: &mut Context<Self>) {
@@ -496,18 +526,18 @@ impl MulchApp {
             self.launchers.iter().enumerate().map(|(ix, launcher)| self.launcher_icon(ix, launcher, cx)).collect();
         let theme = cx.theme();
 
-        h_flex()
-            .w_full()
+        // The title bar: drag empty space to move the window; the icons and
+        // buttons in it are clickable as normal.
+        TitleBar::new()
             .h(px(HEADER_HEIGHT))
-            .flex_shrink_0()
-            .px_5()
-            .gap_4()
-            .border_b_1()
+            .pl_4()
+            .bg(theme.background)
             .border_color(theme.border)
-            .child(h_flex().flex_1().gap_3().children(launcher_icons))
+            .child(h_flex().gap_3().children(launcher_icons))
             .child(
                 h_flex()
                     .gap_2()
+                    .pr_2()
                     .child(
                         Button::new("rescan")
                             .ghost()
@@ -554,8 +584,6 @@ impl MulchApp {
         let (width, height) = (layout.tile_width, layout.tile_width * COVER_ASPECT);
 
         let play_game = game.clone();
-        let menu_game = game.clone();
-        let app = cx.entity().downgrade();
 
         div()
             .id(("game", ix))
@@ -573,7 +601,6 @@ impl MulchApp {
             )
             .child(div().pt_2().text_sm().font_medium().truncate().child(game.name.clone()))
             .child(div().text_xs().text_color(theme.muted_foreground).child(game.platform.label()))
-            .context_menu(move |menu, _, _| game_menu(menu, &menu_game, app.clone()))
             .into_any_element()
     }
 }
@@ -586,7 +613,8 @@ const PLAY_CARD_WIDTH: f32 = 180.;
 const PLAY_CARD_PADDING: f32 = 8.;
 const PLAY_BUTTON_HEIGHT: f32 = 36.;
 const GRID_PADDING: f32 = 20.;
-const HEADER_HEIGHT: f32 = 72.;
+/// The title bar, which also holds the launcher icons and buttons.
+const HEADER_HEIGHT: f32 = 48.;
 /// Slack so pixel rounding never clips the last row.
 const FIT_SLACK: f32 = 8.;
 /// Width kept free on the right so a scrollbar never overlaps the last column.
@@ -623,65 +651,9 @@ fn launcher_glyph(name: &str, icon: Option<PathBuf>, muted: Hsla) -> AnyElement 
     }
 }
 
-fn game_menu(menu: PopupMenu, game: &Game, app: WeakEntity<MulchApp>) -> PopupMenu {
-    let play_game = game.clone();
-    let play_app = app.clone();
-    let mut menu = menu.item(PopupMenuItem::new("Play").on_click(move |_, window, cx| {
-        let at = window.mouse_position();
-        play_app.update(cx, |app, cx| app.request_play(play_game.clone(), at, cx)).ok();
-    }));
-
-    if let Some(show) = game.show_in_launcher.clone() {
-        let name = game.name.clone();
-        let launcher = match game.platform {
-            Platform::Xbox => "Microsoft Store",
-            Platform::Gog => "GOG Galaxy",
-            other => other.label(),
-        };
-        menu = menu.item(
-            PopupMenuItem::new(format!("Show in {launcher}")).on_click(move |_, window, cx| run_action(&show, &name, window, cx)),
-        );
-    }
-    if let Some(dir) = game.install_dir.clone() {
-        menu = menu.item(PopupMenuItem::new("Open folder").on_click(move |_, _, cx| cx.open_with_system(&dir)));
-    }
-    if game.uninstall.is_some() {
-        let uninstall_game = game.clone();
-        menu = menu.separator().item(
-            PopupMenuItem::new(format!("Uninstall with {}…", game.platform.label()))
-                .on_click(move |_, window, cx| confirm_uninstall(&uninstall_game, window, cx)),
-        );
-    }
-    if game.platform == Platform::Manual {
-        if let Action::Exe { path, .. } = &game.launch {
-            let exe = path.clone();
-            menu = menu.separator().item(PopupMenuItem::new("Remove from MulchLauncher").on_click(move |_, _, cx| {
-                app.update(cx, |app, cx| app.remove_manual(exe.clone(), cx)).ok();
-            }));
-        }
-    }
-    menu
-}
-
-fn confirm_uninstall(game: &Game, window: &mut Window, cx: &mut App) {
-    let game = game.clone();
-    window.open_alert_dialog(cx, move |dialog, _, _| {
-        let Some(uninstall) = game.uninstall.clone() else { return dialog };
-        let name = game.name.clone();
-        let platform = game.platform.label();
-        dialog
-            .title(SharedString::from(format!("Uninstall {}?", game.name)))
-            .description(SharedString::from(format!(
-                "Opens {platform}'s uninstaller for this game. {platform} will ask you to confirm."
-            )))
-            .confirm()
-            .ok_text("Continue")
-            .cancel_text("Cancel")
-            .on_ok(move |_, window, cx| {
-                run_action(&uninstall, &name, window, cx);
-                true
-            })
-    });
+/// A full-width, left-aligned button for the play card.
+fn card_button(id: &'static str, icon: IconName, label: impl Into<SharedString>) -> Button {
+    Button::new(id).ghost().small().w_full().justify_start().icon(icon).label(label)
 }
 
 fn run_action(action: &Action, name: &str, window: &mut Window, cx: &mut App) {

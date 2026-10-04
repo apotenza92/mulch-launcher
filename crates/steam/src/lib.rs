@@ -157,7 +157,6 @@ fn scan() -> Vec<Game> {
                 install_dir,
                 Action::Uri(format!("steam://rungameid/{app_id}")),
             );
-            game.uninstall = Some(Action::Uri(format!("steam://uninstall/{app_id}")));
             game.show_in_launcher = Some(Action::Uri(format!("steam://nav/games/details/{app_id}")));
             game.art = cover_art(&root, app_id).map(Art::Cover);
             // Steam records when each game was last played (0 = never), both in
