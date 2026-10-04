@@ -30,15 +30,18 @@ pub struct Section {
 #[derive(Debug, Clone, PartialEq)]
 pub struct GridLayout {
     pub tile_width: f32,
+    /// Tiles across a full row.
+    pub columns: usize,
     /// The groups that have games, top to bottom.
     pub sections: Vec<Section>,
     /// Whether each section has a label (only when there's more than one).
     pub labelled: bool,
 }
 
-/// How many tiles of `tile` width fit across `width` (at least one).
+/// How many tiles of `tile` width fit across `width` (at least one). Allows a
+/// pixel of rounding, so a window sized to fit exactly N columns gets N.
 pub fn columns(width: f32, tile: f32) -> usize {
-    (((width + GRID_GAP) / (tile + GRID_GAP)).floor() as usize).max(1)
+    (((width + GRID_GAP + 1.) / (tile + GRID_GAP)).floor() as usize).max(1)
 }
 
 /// Width needed for `columns` tiles of `tile` width.
@@ -64,7 +67,7 @@ pub fn layout(groups: &[usize], width: f32, size: usize) -> GridLayout {
             Section { group, rows }
         })
         .collect();
-    GridLayout { tile_width, labelled: sections.len() > 1, sections }
+    GridLayout { tile_width, columns: across, labelled: sections.len() > 1, sections }
 }
 
 #[cfg(test)]
@@ -86,7 +89,8 @@ mod tests {
     fn as_many_fit_across_as_the_width_allows() {
         let width = grid_width(8, 180.);
         assert_eq!(columns(width, 180.), 8);
-        assert_eq!(columns(width - 1., 180.), 7);
+        assert_eq!(columns(width - 0.5, 180.), 8);
+        assert_eq!(columns(width - 2., 180.), 7);
         assert_eq!(columns(50., 180.), 1);
     }
 
