@@ -1,6 +1,7 @@
-//! The main window: every detected game as a tile, sized so they all fit
-//! (scrolling once tiles reach their minimum size), plus a row of icons for
-//! the installed launchers, in alphabetical order.
+//! The main window: a slim title bar, a toolbar (launchers on the left, chat
+//! apps in the middle, buttons on the right) and every detected game as a
+//! tile, sized so as many fit as possible (scrolling once tiles reach their
+//! minimum size).
 
 use mulch_launcher::install;
 use mulch_launcher::launch;
@@ -19,7 +20,8 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{WindowExt, *};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use std::collections::HashMap;
+use mulch_discover::Suggestion;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 const APP_NAME: &str = "MulchLauncher";
@@ -32,9 +34,8 @@ pub fn run(pin_requested: bool) {
         Theme::change(ThemeMode::Dark, None, cx);
 
         let options = WindowOptions {
-            // Our own title bar (see `header`): the launcher icons and buttons
-            // live in it, with slim window controls on the right. The title
-            // is still set for the taskbar and Alt+Tab.
+            // Our own slim title bar (see `title_bar`), with the toolbar under
+            // it. The title is still set for the taskbar and Alt+Tab.
             titlebar: Some(TitlebarOptions { title: Some(APP_NAME.into()), ..TitleBar::title_bar_options() }),
             app_owns_titlebar_drag: true,
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(1240.), px(820.)), cx))),
@@ -50,7 +51,11 @@ pub fn run(pin_requested: bool) {
 struct MulchApp {
     games: Vec<Game>,
     launchers: Vec<Launcher>,
+    /// Installed chat apps (Discord, WhatsApp, ...).
+    social: Vec<Launcher>,
     settings: Settings,
+    /// "Add game manually", while it's showing.
+    add_panel: Option<AddPanel>,
     scanning: bool,
     /// A game the user clicked, waiting for a second click on Play.
     pending_play: Option<PendingPlay>,
@@ -76,6 +81,13 @@ enum SetupStep {
     Taskbar,
 }
 
+/// Programs on this PC that look like games, to add with a tick.
+struct AddPanel {
+    /// None while still looking.
+    suggestions: Option<Vec<Suggestion>>,
+    selected: HashSet<PathBuf>,
+}
+
 struct PendingPlay {
     game: Game,
     /// Where the click happened; the Play button opens under it.
@@ -93,7 +105,9 @@ impl MulchApp {
             pin_pending: pin_requested,
             games: Vec::new(),
             launchers: Vec::new(),
+            social: Vec::new(),
             settings,
+            add_panel: None,
             scanning: false,
             pending_play: None,
             history: History::load(),
@@ -154,6 +168,7 @@ impl MulchApp {
         cx.spawn(async move |this, cx| {
             let result = cx.background_spawn(async move { scan::scan_all(&[]) }).await;
             let (mut games, mut launchers) = (result.games.clone(), result.launchers.clone());
+            launchers.extend(result.social.iter().cloned());
             this.update(cx, |app, cx| app.apply(result, cx)).ok();
 
             let (mut games, launchers) = cx
@@ -183,6 +198,7 @@ impl MulchApp {
         self.history.sort(&mut self.games);
         self.launchers = result.launchers;
         self.launchers.sort_by_key(|l| l.name.to_lowercase());
+        self.social = result.social;
         let names: Vec<&str> = self.launchers.iter().map(|l| l.name).collect();
         self.pinned_launchers = install::pinned_launchers(&names);
         self.scanning = false;
@@ -306,7 +322,7 @@ impl MulchApp {
             }
         }
         let launcher_icons: HashMap<&str, PathBuf> = launchers.into_iter().filter_map(|l| Some((l.name, l.icon?))).collect();
-        for launcher in &mut self.launchers {
+        for launcher in self.launchers.iter_mut().chain(&mut self.social) {
             if let Some(icon) = launcher_icons.get(launcher.name) {
                 launcher.icon = Some(icon.clone());
             }
@@ -314,7 +330,53 @@ impl MulchApp {
         cx.notify();
     }
 
-    fn add_games(&mut self, cx: &mut Context<Self>) {
+    /// Opens "Add game manually" and starts looking for games on this PC
+    /// that no launcher knows about.
+    fn open_add_panel(&mut self, cx: &mut Context<Self>) {
+        self.add_panel = Some(AddPanel { suggestions: None, selected: HashSet::new() });
+        cx.notify();
+        let known = scan::known_folders(&self.games, self.launchers.iter().chain(&self.social));
+        cx.spawn(async move |this, cx| {
+            let found = cx.background_spawn(async move { mulch_discover::find_games(&known) }).await;
+            this.update(cx, |app, cx| {
+                if let Some(panel) = &mut app.add_panel {
+                    panel.selected = found.iter().map(|s| s.exe.clone()).collect();
+                    panel.suggestions = Some(found);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn close_add_panel(&mut self, cx: &mut Context<Self>) {
+        self.add_panel = None;
+        cx.notify();
+    }
+
+    fn toggle_suggestion(&mut self, exe: PathBuf, cx: &mut Context<Self>) {
+        if let Some(panel) = &mut self.add_panel {
+            if !panel.selected.remove(&exe) {
+                panel.selected.insert(exe);
+            }
+            cx.notify();
+        }
+    }
+
+    fn add_selected(&mut self, cx: &mut Context<Self>) {
+        let Some(panel) = self.add_panel.take() else { return };
+        for suggestion in panel.suggestions.unwrap_or_default() {
+            if panel.selected.contains(&suggestion.exe) {
+                let _ = manual::add_named(&suggestion.exe, suggestion.name);
+            }
+        }
+        self.rescan(cx);
+    }
+
+    /// Picks executables with the file picker.
+    fn browse_for_games(&mut self, cx: &mut Context<Self>) {
+        self.add_panel = None;
         let picked = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -427,7 +489,7 @@ impl MulchApp {
                     .text_color(muted)
                     .child(
                         "Games from anywhere else, like emulators, itch.io downloads or old installers, can be \
-                         added by picking their .exe. You can always do this later with Add game.",
+                         added here. You can always do this later with Add game manually.",
                     )
                     .into_any_element(),
                 h_flex()
@@ -437,7 +499,7 @@ impl MulchApp {
                             .outline()
                             .icon(IconName::Plus)
                             .label("Add games…")
-                            .on_click(cx.listener(|app, _, _, cx| app.add_games(cx))),
+                            .on_click(cx.listener(|app, _, _, cx| app.open_add_panel(cx))),
                     )
                     .child(
                         Button::new("setup-next")
@@ -521,23 +583,51 @@ impl MulchApp {
         .into_any_element()
     }
 
-    fn header(&self, cx: &mut Context<Self>) -> AnyElement {
-        let launcher_icons: Vec<_> =
-            self.launchers.iter().enumerate().map(|(ix, launcher)| self.launcher_icon(ix, launcher, cx)).collect();
+    /// The slim bar at the very top: drag it to move the window, with the
+    /// app's name in the middle and the window controls on the right. Nothing
+    /// clickable lives here, since Windows treats it all as the window's caption.
+    fn title_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
-
-        // The title bar: drag empty space to move the window; the icons and
-        // buttons in it are clickable as normal.
         TitleBar::new()
-            .h(px(HEADER_HEIGHT))
-            .pl_4()
             .bg(theme.background)
             .border_color(theme.border)
-            .child(h_flex().gap_3().children(launcher_icons))
             .child(
                 h_flex()
+                    .flex_1()
+                    .justify_center()
+                    // Balances the window controls on the right, so the name
+                    // sits in the middle of the window.
+                    .pl(px(WINDOW_CONTROLS_WIDTH))
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child(APP_NAME),
+            )
+            .into_any_element()
+    }
+
+    /// Launchers on the left, chat apps in the middle, buttons on the right.
+    fn toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let launcher_icons: Vec<_> = self
+            .launchers
+            .iter()
+            .enumerate()
+            .map(|(ix, launcher)| self.launcher_icon(("launcher", ix), launcher, cx))
+            .collect();
+        let social_icons: Vec<_> =
+            self.social.iter().enumerate().map(|(ix, app)| self.launcher_icon(("social", ix), app, cx)).collect();
+
+        h_flex()
+            .flex_shrink_0()
+            .h(px(TOOLBAR_HEIGHT))
+            .px_4()
+            .gap_4()
+            .child(h_flex().flex_1().gap_3().children(launcher_icons))
+            .child(h_flex().gap_3().children(social_icons))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .justify_end()
                     .gap_2()
-                    .pr_2()
                     .child(
                         Button::new("rescan")
                             .ghost()
@@ -552,20 +642,113 @@ impl MulchApp {
                             .primary()
                             .small()
                             .icon(IconName::Plus)
-                            .label("Add game")
-                            .on_click(cx.listener(|app, _, _, cx| app.add_games(cx))),
+                            .label("Add game manually")
+                            .on_click(cx.listener(|app, _, _, cx| app.open_add_panel(cx))),
                     ),
             )
             .into_any_element()
     }
 
-    fn launcher_icon(&self, ix: usize, launcher: &Launcher, cx: &mut Context<Self>) -> AnyElement {
+    /// "Add game manually": games found on this PC, ticked, plus a file picker
+    /// for anything it missed.
+    fn add_panel(&self, panel: &AddPanel, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let body = match &panel.suggestions {
+            None => div().text_sm().text_color(muted).child("Looking for games on this PC…").into_any_element(),
+            Some(found) if found.is_empty() => div()
+                .text_sm()
+                .text_color(muted)
+                .child("No other games found. Use Browse to pick a game's .exe yourself.")
+                .into_any_element(),
+            Some(found) => v_flex()
+                .id("suggestions")
+                .max_h(px(320.))
+                .overflow_y_scroll()
+                .gap_3()
+                .children(found.iter().enumerate().map(|(ix, suggestion)| {
+                    let exe = suggestion.exe.clone();
+                    h_flex()
+                        .gap_3()
+                        .items_start()
+                        .child(
+                            Checkbox::new(("suggestion", ix))
+                                .checked(panel.selected.contains(&suggestion.exe))
+                                .on_click(cx.listener(move |app, _: &bool, _, cx| app.toggle_suggestion(exe.clone(), cx))),
+                        )
+                        .child(
+                            v_flex()
+                                .min_w_0()
+                                .child(div().text_sm().font_medium().child(suggestion.name.clone()))
+                                .child(div().text_xs().text_color(muted).truncate().child(suggestion.exe.display().to_string()))
+                                .child(div().text_xs().text_color(muted).child(format!("Looks like a game: {}", suggestion.reason))),
+                        )
+                }))
+                .into_any_element(),
+        };
+        let can_add = panel.suggestions.is_some() && !panel.selected.is_empty();
+
+        deferred(
+            div()
+                .id("add-backdrop")
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .occlude()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(theme.background.opacity(0.85))
+                .child(
+                    v_flex()
+                        .w(px(520.))
+                        .p_6()
+                        .gap_4()
+                        .rounded_lg()
+                        .bg(theme.popover)
+                        .border_1()
+                        .border_color(theme.border)
+                        .shadow_lg()
+                        .child(div().text_xl().font_semibold().child("Add game manually"))
+                        .child(body)
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(
+                                    Button::new("add-browse")
+                                        .outline()
+                                        .icon(IconName::FolderOpen)
+                                        .label("Browse…")
+                                        .on_click(cx.listener(|app, _, _, cx| app.browse_for_games(cx))),
+                                )
+                                .child(div().flex_1())
+                                .child(
+                                    Button::new("add-cancel")
+                                        .ghost()
+                                        .label("Cancel")
+                                        .on_click(cx.listener(|app, _, _, cx| app.close_add_panel(cx))),
+                                )
+                                .child(
+                                    Button::new("add-selected")
+                                        .primary()
+                                        .label("Add selected")
+                                        .disabled(!can_add)
+                                        .on_click(cx.listener(|app, _, _, cx| app.add_selected(cx))),
+                                ),
+                        ),
+                ),
+        )
+        .with_priority(4)
+        .into_any_element()
+    }
+    fn launcher_icon(&self, id: (&'static str, usize), launcher: &Launcher, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let name = launcher.name;
         let open = launcher.open.clone();
 
         div()
-            .id(("launcher", ix))
+            .id(id)
             .size(px(LAUNCHER_SIZE))
             .flex()
             .items_center()
@@ -613,8 +796,12 @@ const PLAY_CARD_WIDTH: f32 = 180.;
 const PLAY_CARD_PADDING: f32 = 8.;
 const PLAY_BUTTON_HEIGHT: f32 = 36.;
 const GRID_PADDING: f32 = 20.;
-/// The title bar, which also holds the launcher icons and buttons.
-const HEADER_HEIGHT: f32 = 48.;
+/// The toolbar under the title bar.
+const TOOLBAR_HEIGHT: f32 = 52.;
+/// The title bar plus the toolbar.
+const HEADER_HEIGHT: f32 = 34. + TOOLBAR_HEIGHT;
+/// Minimise, maximise and close, on the right of the title bar, less its left padding.
+const WINDOW_CONTROLS_WIDTH: f32 = 3. * 34. - 12.;
 /// Slack so pixel rounding never clips the last row.
 const FIT_SLACK: f32 = 8.;
 /// Width kept free on the right so a scrollbar never overlaps the last column.
@@ -670,7 +857,8 @@ impl Render for MulchApp {
             f32::from(viewport.width) - GRID_PADDING * 2. - SCROLLBAR_ROOM,
             f32::from(viewport.height) - HEADER_HEIGHT - GRID_PADDING * 2. - FIT_SLACK,
         );
-        let header = self.header(cx);
+        let title_bar = self.title_bar(cx);
+        let toolbar = self.toolbar(cx);
         // Whole-pixel tile widths, and rows built explicitly rather than by
         // wrapping: with fractional widths, wrapping could push a row's last
         // tile down a line on some frames and back on others while resizing.
@@ -686,6 +874,7 @@ impl Render for MulchApp {
 
         let play_card = self.pending_play.as_ref().map(|pending| self.play_card(pending, cx));
         let setup_panel = self.setup.map(|step| self.setup_panel(step, cx));
+        let add_panel = self.add_panel.as_ref().map(|panel| self.add_panel(panel, cx));
         if self.pin_pending {
             self.pin_pending = false;
             cx.defer_in(window, |app, window, cx| app.pin_to_taskbar(window, cx));
@@ -696,7 +885,9 @@ impl Render for MulchApp {
             .size_full()
             .children(play_card)
             .children(setup_panel)
-            .child(header)
+            .children(add_panel)
+            .child(title_bar)
+            .child(toolbar)
             .child(
                 div()
                     .id("library")
@@ -719,7 +910,7 @@ impl Render for MulchApp {
                                     div()
                                         .text_sm()
                                         .text_color(cx.theme().muted_foreground)
-                                        .child("Install a game with any launcher, or use Add game to pick one yourself."),
+                                        .child("Install a game with any launcher, or use Add game manually."),
                                 ),
                         )
                     })

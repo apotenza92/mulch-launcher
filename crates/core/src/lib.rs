@@ -106,10 +106,11 @@ pub enum Art {
     Icon(PathBuf),
 }
 
-/// An installed launcher, shown as a button in the app.
+/// An installed app shown as a button: a game launcher (with its platform)
+/// or a chat app like Discord (no platform).
 #[derive(Clone, Debug, Serialize)]
 pub struct Launcher {
-    pub platform: Platform,
+    pub platform: Option<Platform>,
     pub name: &'static str,
     pub open: Action,
     /// The launcher's app icon (filled in after the scan, like game art).
@@ -122,7 +123,7 @@ impl Launcher {
     /// A launcher opened by running its executable.
     pub fn from_exe(platform: Platform, name: &'static str, exe: PathBuf) -> Self {
         Self {
-            platform,
+            platform: Some(platform),
             name,
             icon: None,
             icon_source: Some(exe.clone()),

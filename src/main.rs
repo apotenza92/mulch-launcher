@@ -10,6 +10,10 @@ fn main() {
         print_scan();
         return;
     }
+    if has("--discover") {
+        print_discover();
+        return;
+    }
     // Run by Windows' "Installed apps" > Uninstall.
     if has("--uninstall") {
         if let Err(err) = install::uninstall() {
@@ -40,8 +44,22 @@ fn print_scan() {
         );
     }
     println!("\nLaunchers: {}", result.launchers.iter().map(|l| l.name).collect::<Vec<_>>().join(", "));
+    println!("Chat apps: {}", result.social.iter().map(|l| l.name).collect::<Vec<_>>().join(", "));
     println!("\n{} games in {:?}", result.games.len(), result.total);
     for (name, took) in &result.timings {
         println!("  {name:<8} {took:?}");
     }
+}
+
+/// `MulchLauncher --discover`: lists programs that look like games but
+/// aren't in any launcher, with the evidence for each.
+fn print_discover() {
+    let started = std::time::Instant::now();
+    let result = scan::scan_all(&[]);
+    let known = scan::known_folders(&result.games, result.launchers.iter().chain(&result.social));
+    let suggestions = mulch_discover::find_games(&known);
+    for s in &suggestions {
+        println!("{:<34} {}\n{:<34} ({})", s.name, s.exe.display(), "", s.reason);
+    }
+    println!("\n{} suggestions in {:?}", suggestions.len(), started.elapsed());
 }

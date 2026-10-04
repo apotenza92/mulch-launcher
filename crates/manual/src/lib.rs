@@ -36,11 +36,16 @@ fn save(games: &[ManualGame]) -> io::Result<()> {
 
 /// Adds an executable, named after its file. Returns false if it was already there.
 pub fn add(exe: &Path) -> io::Result<bool> {
+    let name = exe.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Game".into());
+    add_named(exe, name)
+}
+
+/// Adds an executable under the given name. Returns false if it was already there.
+pub fn add_named(exe: &Path, name: String) -> io::Result<bool> {
     let mut games = load();
     if games.iter().any(|g| g.exe == exe) {
         return Ok(false);
     }
-    let name = exe.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Game".into());
     games.push(ManualGame { name, exe: exe.to_path_buf(), args: Vec::new() });
     save(&games)?;
     Ok(true)

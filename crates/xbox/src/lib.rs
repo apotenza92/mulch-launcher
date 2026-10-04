@@ -38,28 +38,36 @@ impl Library for Xbox {
 
     /// The Xbox app, found as a package (it registers no link handler).
     fn launcher(&self, _: &ScanContext) -> Option<Launcher> {
-        init_winrt();
-        let manager = PackageManager::new().ok()?;
-        let package = manager
-            .FindPackagesByUserSecurityIdPackageFamilyName(&HSTRING::new(), &HSTRING::from("Microsoft.GamingApp_8wekyb3d8bbwe"))
-            .ok()?
-            .into_iter()
-            .next()?;
-        let app_id = package.GetAppListEntries().ok()?.into_iter().find_map(|e| e.AppUserModelId().ok())?;
-        let install_dir = package.InstalledPath().ok().map(|p| PathBuf::from(p.to_string()));
-        Some(Launcher {
-            platform: Platform::Xbox,
-            name: "Xbox",
-            open: Action::StoreApp(app_id.to_string()),
-            icon: install_dir.as_deref().and_then(manifest_icon),
-            icon_source: None,
-        })
+        let mut launcher = store_app("Microsoft.GamingApp_8wekyb3d8bbwe", "Xbox")?;
+        launcher.platform = Some(Platform::Xbox);
+        Some(launcher)
     }
 
     fn games(&self, _: &ScanContext) -> Vec<Game> {
         init_winrt();
         scan_packages().unwrap_or_default()
     }
+}
+
+/// An installed Microsoft Store app as a button, by package family name:
+/// opened by its AppUserModelId, with its app-list icon.
+pub fn store_app(family_name: &str, name: &'static str) -> Option<Launcher> {
+    init_winrt();
+    let manager = PackageManager::new().ok()?;
+    let package = manager
+        .FindPackagesByUserSecurityIdPackageFamilyName(&HSTRING::new(), &HSTRING::from(family_name))
+        .ok()?
+        .into_iter()
+        .next()?;
+    let app_id = package.GetAppListEntries().ok()?.into_iter().find_map(|e| e.AppUserModelId().ok())?;
+    let install_dir = package.InstalledPath().ok().map(|p| PathBuf::from(p.to_string()));
+    Some(Launcher {
+        platform: None,
+        name,
+        open: Action::StoreApp(app_id.to_string()),
+        icon: install_dir.as_deref().and_then(manifest_icon),
+        icon_source: None,
+    })
 }
 
 /// WinRT needs the thread initialised; already-initialised is fine.

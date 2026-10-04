@@ -1,0 +1,11 @@
+[package]
+name = "mulch-discover"
+version = "0.1.0"
+description = "Finds games on the PC that aren't in any launcher, for MulchLauncher to suggest"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+goblin = { version = "0.9", default-features = false, features = ["std", "pe32", "pe64"] }
+windows = { workspace = true, features = ["Win32_System_Com", "Win32_UI_Shell", "Win32_Storage_FileSystem"] }

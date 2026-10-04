@@ -1,0 +1,11 @@
+[package]
+name = "mulch-social"
+version = "0.1.0"
+description = "Chat apps (Discord, WhatsApp, ...) for MulchLauncher's toolbar"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+mulch-core = { workspace = true }
+mulch-xbox = { workspace = true }
