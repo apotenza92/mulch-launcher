@@ -28,7 +28,10 @@ pub fn load() -> Vec<ManualGame> {
 }
 
 fn load_from(data_dir: &Path) -> Vec<ManualGame> {
-    fs::read_to_string(store_in(data_dir)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+    fs::read_to_string(store_in(data_dir))
+        .ok()
+        .and_then(|text| serde_json::from_str(text.trim_start_matches('\u{feff}')).ok())
+        .unwrap_or_default()
 }
 
 fn save(games: &[ManualGame]) -> io::Result<()> {

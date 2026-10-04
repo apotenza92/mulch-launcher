@@ -4,8 +4,8 @@
 
 use gpui_kit::component::button::*;
 use gpui_kit::component::checkbox::Checkbox;
-use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::notification::Notification;
+use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::theme::{ActiveTheme, Theme, ThemeMode};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{WindowExt, *};
@@ -254,6 +254,10 @@ struct MulchApp {
     confirm_remove: Option<String>,
     /// Each game's hover lift (0 resting, 1 lifted), eased over time.
     lifts: HashMap<String, Tween>,
+    /// Whether the window is the active one (it only re-checks the library then).
+    active: bool,
+    /// A quiet re-check of the library is running.
+    checking: bool,
     /// Games still waiting for their poster (being looked up or downloaded):
     /// they show a spinner rather than a stand-in icon until it arrives.
     art_pending: HashSet<String>,
@@ -280,6 +284,16 @@ struct MulchApp {
     _subscriptions: Vec<Subscription>,
 }
 
+/// How often to re-check the installed games while the window is active.
+const LIBRARY_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// What identifies the library: each game's id and name, in order.
+fn library_signature(games: &[Game]) -> Vec<(String, String)> {
+    let mut ids: Vec<(String, String)> = games.iter().map(|g| (g.id.clone(), g.name.clone())).collect();
+    ids.sort();
+    ids
+}
+
 /// How often to look for running games (to record them as played).
 const PLAY_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -304,6 +318,8 @@ impl MulchApp {
             scanning: false,
             confirm_remove: None,
             lifts: HashMap::new(),
+            active: true,
+            checking: false,
             art_pending: HashSet::new(),
             button_heights: HashMap::new(),
             leaving: HashMap::new(),
@@ -325,8 +341,10 @@ impl MulchApp {
                     }
                 }),
                 cx.observe_window_activation(window, |app, window, cx| {
-                    if window.is_window_active() {
+                    app.active = window.is_window_active();
+                    if app.active {
                         app.resort(cx);
+                        app.check_for_changes(cx);
                     }
                 }),
             ],
@@ -334,12 +352,48 @@ impl MulchApp {
         app.apply_theme(window, cx);
         app.rescan(cx);
         app.watch_for_running_games(cx);
+        app.watch_for_library_changes(cx);
         app
     }
 
     /// Every so often, records any game with a process running from its
     /// folder as played. This catches games started from their own launcher
     /// too, on every platform.
+    /// While the window is active, quietly re-checks which games are
+    /// installed every few seconds, so installs and uninstalls show up on
+    /// their own. A check is a ~0.1 s scan on a background thread.
+    fn watch_for_library_changes(&self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(LIBRARY_CHECK_INTERVAL).await;
+                if this.update(cx, |app, cx| app.check_for_changes(cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Scans in the background and refreshes only if the installed games
+    /// changed (so nothing on screen moves otherwise).
+    fn check_for_changes(&mut self, cx: &mut Context<Self>) {
+        if !self.active || self.scanning || self.checking {
+            return;
+        }
+        self.checking = true;
+        cx.spawn(async move |this, cx| {
+            let found = cx.background_spawn(async move { library_signature(&scan::scan_all(&[]).games) }).await;
+            this.update(cx, |app, cx| {
+                app.checking = false;
+                if found != library_signature(&app.games) {
+                    app.rescan(cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn watch_for_running_games(&self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             loop {
@@ -416,9 +470,6 @@ impl MulchApp {
         // after the scan), so a rescan doesn't blank every tile for a moment.
         let mut shown: HashMap<String, Art> = self.games.drain(..).filter_map(|g| Some((g.id, g.art?))).collect();
         self.games = result.games;
-        // Games with no poster yet wait for the poster lookup before showing anything.
-        self.art_pending =
-            self.games.iter().filter(|g| !matches!(g.art, Some(Art::Cover(_)))).map(|g| g.id.clone()).collect();
         if self.first_shown.is_none() && !self.games.is_empty() {
             self.first_shown = Some(std::time::Instant::now());
         }
@@ -429,6 +480,9 @@ impl MulchApp {
                 }
             }
         }
+        // Only games with nothing to show yet (new ones) wait for their art;
+        // everything already showing stays exactly as it is.
+        self.art_pending = self.games.iter().filter(|g| g.art.is_none()).map(|g| g.id.clone()).collect();
         self.history.sort(&mut self.games);
         self.launchers = result.launchers;
         // Launchers with the most games first; ties alphabetical.

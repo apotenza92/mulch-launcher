@@ -39,7 +39,7 @@ impl Settings {
     pub fn load() -> Self {
         path()
             .and_then(|p| fs::read_to_string(p).ok())
-            .and_then(|text| serde_json::from_str(&text).ok())
+            .and_then(|text| serde_json::from_str(text.trim_start_matches('\u{feff}')).ok())
             .unwrap_or_default()
     }
 
