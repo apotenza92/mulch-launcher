@@ -8,10 +8,10 @@
 /// Cover art is portrait 2:3.
 pub const COVER_ASPECT: f32 = 1.5;
 pub const GRID_GAP: f32 = 16.;
-/// Name (text_sm) + platform (text_xs) + the padding above them.
-pub const LABEL_HEIGHT: f32 = 50.;
-/// A group's label (text_sm) and the space under it, above the gap to its first row.
-pub const HEADING_HEIGHT: f32 = 32.;
+/// A game's name under its poster (text_sm) and the space above it.
+pub const LABEL_HEIGHT: f32 = 30.;
+/// A group's heading (text_xl) and the space under it, above the gap to its first row.
+pub const HEADING_HEIGHT: f32 = 46.;
 
 /// Every tile's width.
 pub const TILE_WIDTH: f32 = 180.;

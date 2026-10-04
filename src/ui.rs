@@ -968,7 +968,11 @@ impl MulchApp {
         // The full name shows on hover only when it's cut short.
         let hovered = self.hovered_tile == Some(ix);
         let (dx, dy) = if hovered { self.tilt } else { (0., 0.) };
-        let show_full_name = hovered && name_is_cut_short(&game.name, width, window, cx);
+        // How far a hovered, cut-short name slides to show its end.
+        let overflow = hovered
+            .then(|| text_width(&game.name, window, cx) - width)
+            .filter(|o| *o > 0.)
+            .map(|o| o + MARQUEE_END_ROOM);
         // The glow takes the poster's own colour where it has one.
         let accent = match &game.art {
             Some(Art::Cover(path) | Art::Icon(path)) => self.accents.get(path).copied(),
@@ -1050,42 +1054,19 @@ impl MulchApp {
                         inset: false,
                     }]),
             )
-            .child(
-                // One line, cut short with "…"; hovering one that's cut short
-                // shows the whole name in a pill whose text sits exactly over
-                // it, running over the neighbouring tiles (drawn last so
-                // nothing covers it).
-                div()
-                    .relative()
-                    .h(px(NAME_LINE_HEIGHT))
-                    .mt_2()
-                    .text_sm()
-                    .font_medium()
-                    .child(div().truncate().child(game.name.clone()))
-                    .when(show_full_name, |this| {
-                        this.child(
-                            deferred(
-                                div()
-                                    .absolute()
-                                    // Offset by padding and border, so the text lines up exactly.
-                                    .top(px(-NAME_PILL_PADDING.1 - 1.))
-                                    .left(px(-NAME_PILL_PADDING.0 - 1.))
-                                    .px(px(NAME_PILL_PADDING.0))
-                                    .py(px(NAME_PILL_PADDING.1))
-                                    .whitespace_nowrap()
-                                    .rounded_full()
-                                    // Solid, so the cut-short name underneath doesn't show through.
-                                    .bg(with_alpha(theme.popover, 1.))
-                                    .border_1()
-                                    .border_color(theme.border)
-                                    .shadow_md()
-                                    .child(game.name.clone()),
-                            )
-                            .with_priority(1),
-                        )
-                    }),
-            )
-            .child(div().text_xs().text_color(theme.muted_foreground).child(game.platform.label()))
+            .child({
+                // One line, cut short with "…"; while hovered, a name that's cut
+                // short slides along to show the rest, and back.
+                let line = div().h(px(NAME_LINE_HEIGHT)).mt_2().text_sm().font_medium().overflow_hidden();
+                match overflow {
+                    Some(overflow) => line.child(div().whitespace_nowrap().child(game.name.clone()).with_animation(
+                        ElementId::Name(format!("marquee-{}", game.id).into()),
+                        marquee(overflow),
+                        move |text, t| text.ml(px(-overflow * marquee_offset(t))),
+                    )),
+                    None => line.child(div().truncate().child(game.name.clone())),
+                }
+            })
             .h(px(height + LABEL_HEIGHT))
             // Tiles fade and rise into place when they first appear, one
             // shortly after another.
@@ -1223,8 +1204,28 @@ fn entrance(ix: usize) -> Animation {
 
 /// A game name's line under its tile (text_sm).
 const NAME_LINE_HEIGHT: f32 = 20.;
-/// Padding around a hovered game's full name (horizontal, vertical; the border adds 1).
-const NAME_PILL_PADDING: (f32, f32) = (9., 3.);
+/// How fast a cut-short name slides (px per second), and how long it rests at each end.
+const MARQUEE_SPEED: f32 = 45.;
+const MARQUEE_REST: f32 = 0.9;
+/// Slack at the end of a slide, so the last letter isn't clipped.
+const MARQUEE_END_ROOM: f32 = 4.;
+
+/// One round of a sliding name: rest, slide to the end, rest, slide back.
+fn marquee(overflow: f32) -> Animation {
+    let slide = (overflow / MARQUEE_SPEED).max(0.6);
+    Animation::new(std::time::Duration::from_secs_f32(2. * (slide + MARQUEE_REST))).repeat()
+}
+
+/// How far along a sliding name is (0 start, 1 end) at `t` through a round.
+fn marquee_offset(t: f32) -> f32 {
+    let ease = |x: f32| x * x * (3. - 2. * x);
+    match t {
+        t if t < 0.2 => 0.,
+        t if t < 0.5 => ease((t - 0.2) / 0.3),
+        t if t < 0.7 => 1.,
+        t => 1. - ease((t - 0.7) / 0.3),
+    }
+}
 /// Labels for the recency groups (see `recency_groups`).
 const GROUP_NAMES: [&str; 3] = ["Played in the last week", "Played in the last month", "Everything else"];
 
@@ -1375,11 +1376,6 @@ fn quick_tooltip(id: &'static str, text: &'static str, child: impl IntoElement) 
         .tooltip_show_delay(TOOLTIP_DELAY)
 }
 
-/// Whether a game's name (text_sm, medium weight) is too wide for its tile.
-fn name_is_cut_short(name: &str, width: f32, window: &Window, cx: &App) -> bool {
-    text_width(name, window, cx) > width
-}
-
 /// Width of a line of text_sm, medium-weight text.
 fn text_width(text: &str, window: &Window, cx: &App) -> f32 {
     let font = Font { weight: FontWeight::MEDIUM, ..font(cx.theme().font_family.clone()) };
@@ -1518,7 +1514,6 @@ impl Render for MulchApp {
         // Rows built explicitly (rather than by wrapping) so each group starts a new row.
         let mut tiles: Vec<AnyElement> =
             self.games.iter().enumerate().map(|(ix, game)| self.tile(ix, game, &layout, window, cx)).collect();
-        let muted = cx.theme().muted_foreground;
         let mut sections = Vec::new();
         for section in &layout.sections {
             let mut rows = Vec::new();
@@ -1534,9 +1529,10 @@ impl Render for MulchApp {
                         this.child(
                             div()
                                 .h(px(HEADING_HEIGHT - GRID_GAP))
-                                .text_sm()
-                                .font_semibold()
-                                .text_color(muted)
+                                .flex()
+                                .items_end()
+                                .text_xl()
+                                .font_bold()
                                 .child(GROUP_NAMES[section.group]),
                         )
                     })
