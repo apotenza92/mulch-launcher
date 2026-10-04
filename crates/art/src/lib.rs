@@ -3,8 +3,10 @@
 //! as a PNG so it only costs time once per game.
 
 mod accent;
+mod glow;
 mod glyph;
 pub use accent::accent;
+pub use glow::{GLOW_PAD, GLOW_WIDTH, glow};
 pub use glyph::glyph;
 use mulch_core::{Art, Game, Launcher};
 use std::collections::hash_map::DefaultHasher;

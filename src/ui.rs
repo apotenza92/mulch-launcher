@@ -281,8 +281,10 @@ struct MulchApp {
     leaving: HashMap<String, Tween>,
     /// Each launcher's icon as a one-colour glyph (light ink, dark ink), for poster buttons.
     glyphs: HashMap<Platform, (PathBuf, PathBuf)>,
-    /// Each poster's accent colour, for tinting its glow.
+    /// Each poster's accent colour, for tinting things around it.
     accents: HashMap<PathBuf, Hsla>,
+    /// Each cover's glow image (its own colours, spilling past its edges).
+    glows: HashMap<PathBuf, PathBuf>,
     /// A theme change in progress: the colours it's blending from and to.
     theme_fade: Option<(ThemeColor, ThemeColor, Tween)>,
     /// When games first appeared: until shortly after, tiles enter one after
@@ -338,6 +340,7 @@ impl MulchApp {
             button_heights: HashMap::new(),
             leaving: HashMap::new(),
             accents: HashMap::new(),
+            glows: HashMap::new(),
             glyphs: HashMap::new(),
             theme_fade: None,
             first_shown: None,
@@ -757,8 +760,36 @@ impl MulchApp {
         .detach();
     }
 
-    /// Works out the accent colour of posters that don't have one yet, in the background.
+    /// Works out the accent colour (and for covers, the glow) of posters that
+    /// don't have them yet, in the background.
     fn find_accents(&mut self, cx: &mut Context<Self>) {
+        let covers: Vec<PathBuf> = self
+            .games
+            .iter()
+            .filter_map(|g| match &g.art {
+                Some(Art::Cover(path)) => Some(path.clone()),
+                _ => None,
+            })
+            .filter(|path| !self.glows.contains_key(path))
+            .collect();
+        if !covers.is_empty() {
+            cx.spawn(async move |this, cx| {
+                let found = cx
+                    .background_spawn(async move {
+                        covers
+                            .into_iter()
+                            .filter_map(|path| Some((path.clone(), art::glow(&path)?)))
+                            .collect::<Vec<_>>()
+                    })
+                    .await;
+                this.update(cx, |app, cx| {
+                    app.glows.extend(found);
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+        }
         let wanted: Vec<PathBuf> = self
             .games
             .iter()
@@ -1148,14 +1179,19 @@ impl MulchApp {
             .then(|| text_width(&game.name, window, cx) - width)
             .filter(|o| *o > 0.)
             .map(|o| o + MARQUEE_END_ROOM);
-        // The hover ring is a pale tint of the poster's own colour where it has one.
-        let accent = match &game.art {
-            Some(Art::Cover(path) | Art::Icon(path)) => self.accents.get(path).copied(),
-            None => None,
-        };
-        let shine = match accent {
-            Some(color) => Hsla { l: color.l.max(0.85), a: 1., ..color },
-            None => gpui_kit::white(),
+        // Its glow: shown behind it, reaching past each edge.
+        let glow = match &game.art {
+            Some(Art::Cover(path)) if lift > 0. => self.glows.get(path).map(|image| {
+                let reach = art::GLOW_PAD as f32 * width / art::GLOW_WIDTH as f32;
+                img(image.clone())
+                    .absolute()
+                    .top(px(-reach))
+                    .left(px(-reach))
+                    .w(px(width + 2. * reach))
+                    .h(px(height + 2. * reach))
+                    .opacity(GLOW_STRENGTH * lift.clamp(0., 1.))
+            }),
+            _ => None,
         };
         let leaving = Tween::value(&self.leaving, &game.id);
         let staggered = self.first_shown.is_none_or(|at| at.elapsed() < STAGGER_WINDOW);
@@ -1190,22 +1226,18 @@ impl MulchApp {
             }))
             .child(
                 // Every poster casts a soft drop shadow. Hovered, the shadow deepens
-                // and a ring in a pale tint of its own colour fades in around it.
-                // Then it's drawn after the other tiles, so the shadow falls over them.
+                // and it glows in its own colours, each edge's spilling past it.
+                // Then it's drawn after the other tiles, so both fall over them.
                 div().relative().w(px(width)).h(px(height)).child({
-                    let frame = div()
-                        .relative()
-                        .size_full()
-                        .child(
-                            div()
-                                .size_full()
-                                .overflow_hidden()
-                                .rounded(px(TILE_RADIUS))
-                                .bg(theme.muted)
-                                .child(poster)
-                                .shadow(cast_shadow(lift, dark)),
-                        )
-                        .when(lift > 0., |frame| frame.child(ring(lift, shine)));
+                    let frame = div().relative().size_full().children(glow).child(
+                        div()
+                            .size_full()
+                            .overflow_hidden()
+                            .rounded(px(TILE_RADIUS))
+                            .bg(theme.muted)
+                            .child(poster)
+                            .shadow(cast_shadow(lift, dark)),
+                    );
                     if lift > 0. {
                         deferred(frame).with_priority(0).into_any_element()
                     } else {
@@ -1345,23 +1377,8 @@ fn blend_colors(from: &ThemeColor, to: &ThemeColor, t: f32) -> ThemeColor {
 /// Corner rounding for posters, panels and cards.
 const TILE_RADIUS: f32 = 8.;
 
-/// A ring around a hovered poster, just outside its edge, fading in with
-/// `lift` (0 to 1).
-fn ring(lift: f32, color: Hsla) -> Div {
-    div()
-        .absolute()
-        .top(px(-RING_GAP))
-        .left(px(-RING_GAP))
-        .right(px(-RING_GAP))
-        .bottom(px(-RING_GAP))
-        .rounded(px(TILE_RADIUS + RING_GAP))
-        .border(px(RING_WIDTH))
-        .border_color(with_alpha(color, RING_ALPHA * lift.clamp(0., 1.)))
-}
-/// The hover ring's distance outside the poster, thickness and strength.
-const RING_GAP: f32 = 4.;
-const RING_WIDTH: f32 = 2.;
-const RING_ALPHA: f32 = 0.9;
+/// How strongly a hovered poster glows.
+const GLOW_STRENGTH: f32 = 0.9;
 
 /// Every poster's drop shadow, so it stands off the background: subtle at
 /// rest, deeper and softer as it's hovered (`lift` 0 to 1).
