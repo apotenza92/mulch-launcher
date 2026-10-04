@@ -109,6 +109,18 @@ taskbar pin if you made one, the Installed apps entry, Windows' own cache
 entries for the program, and folders older versions used in AppData. Nothing
 is left behind.
 
+## Updates
+
+Installed copies check GitHub for a newer release at startup and every 6
+hours. A new version downloads in the background, is checked against its
+SHA-256 checksum, and is swapped in for the running program. MulchLauncher
+then restarts into it: straight away if you're not using it, otherwise as
+soon as you switch to another window. It reopens exactly where it was
+(position, size, maximised or minimised), behind the window you're in,
+without taking focus.
+
+To publish an update: bump `version` in Cargo.toml, then run
+`scripts\release.ps1` (needs the GitHub CLI, signed in).
 ## Roadmap
 
 See [docs/nudge-updates.md](docs/nudge-updates.md) for the nudge-updates plan.

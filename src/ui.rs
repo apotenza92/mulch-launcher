@@ -19,6 +19,7 @@ use mulch_launcher::launch;
 use mulch_launcher::layout::{
     COVER_ASPECT, GRID_GAP, GridLayout, HEADING_HEIGHT, LABEL_HEIGHT, TILE_WIDTH, grid_width, layout as grid_layout,
 };
+use mulch_launcher::restore::{Restore, WindowState};
 use mulch_launcher::scan::{self, Action, Art, Game, Launcher, Platform, ScanResult};
 use mulch_manual as manual;
 use mulch_posters as posters;
@@ -30,7 +31,9 @@ use std::rc::Rc;
 
 const APP_NAME: &str = "MulchLauncher";
 
-pub fn run() {
+/// `restore`: set when restarting after an update, to reopen where the old
+/// copy was, in the background.
+pub fn run(restore: Option<Restore>) {
     gpui_kit::application().with_assets(crate::assets::Assets).run(move |cx| {
         gpui_kit::init(cx);
         Theme::change(theme_mode(cx.window_appearance()), None, cx);
@@ -43,13 +46,27 @@ pub fn run() {
             app_owns_titlebar_drag: true,
             // Frosted glass: the desktop behind shows through, blurred.
             window_background: WindowBackgroundAppearance::Blurred,
-            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, default_window_size(cx), cx))),
+            window_bounds: Some(match restore {
+                Some(r) => {
+                    let bounds = Bounds::new(point(px(r.x), px(r.y)), size(px(r.width), px(r.height)));
+                    if r.state == WindowState::Maximized {
+                        WindowBounds::Maximized(bounds)
+                    } else {
+                        WindowBounds::Windowed(bounds)
+                    }
+                }
+                None => WindowBounds::Windowed(Bounds::centered(None, default_window_size(cx), cx)),
+            }),
+            // Restarted for an update: created hidden, then shown behind the
+            // window the user is in (see update_min_width).
+            show: restore.is_none(),
+            focus: restore.is_none(),
             // The width also grows to fit the toolbar (see `update_min_width`).
             window_min_size: Some(size(px(MIN_WINDOW_WIDTH), px(360.))),
             app_id: Some(APP_NAME.into()),
             ..Default::default()
         };
-        gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| MulchApp::new(window, cx)))
+        gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| MulchApp::new(restore, window, cx)))
             .expect("failed to open the window");
     });
 }
@@ -253,6 +270,10 @@ struct MulchApp {
     confirm_remove: Option<String>,
     /// Each game's hover lift (0 resting, 1 lifted), eased over time.
     lifts: HashMap<String, Tween>,
+    /// Reopening after an update: show the window in the background once it exists.
+    restore: Option<Restore>,
+    /// An update is installed: restart into it when the user isn't using the app.
+    update_ready: bool,
     /// Whether the window is the active one (it only re-checks the library then).
     active: bool,
     /// A quiet re-check of the library is running.
@@ -280,6 +301,9 @@ struct MulchApp {
     _subscriptions: Vec<Subscription>,
 }
 
+/// How often an installed copy checks for an update.
+const UPDATE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+
 /// How often to re-check the installed games while the window is active.
 const LIBRARY_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -301,7 +325,7 @@ struct AddPanel {
 }
 
 impl MulchApp {
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(restore: Option<Restore>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut app = Self {
             games: Vec::new(),
             launchers: Vec::new(),
@@ -314,6 +338,8 @@ impl MulchApp {
             scanning: false,
             confirm_remove: None,
             lifts: HashMap::new(),
+            restore,
+            update_ready: false,
             active: true,
             checking: false,
             art_pending: HashSet::new(),
@@ -332,6 +358,11 @@ impl MulchApp {
                 cx.observe_window_appearance(window, |app, window, cx| app.fade_theme(window, cx)),
                 cx.observe_window_activation(window, |app, window, cx| {
                     app.active = window.is_window_active();
+                    // An update waiting: restart as soon as the user moves on.
+                    if !app.active && app.update_ready {
+                        app.restart_for_update(window, cx);
+                        return;
+                    }
                     if app.active {
                         app.resort(cx);
                         app.check_for_changes(cx);
@@ -343,12 +374,72 @@ impl MulchApp {
         app.rescan(cx);
         app.watch_for_running_games(cx);
         app.watch_for_library_changes(cx);
+        app.watch_for_updates(window, cx);
         app
     }
 
     /// Every so often, records any game with a process running from its
     /// folder as played. This catches games started from their own launcher
     /// too, on every platform.
+    /// Installed copies check for a newer release at startup and every few
+    /// hours, download and install it in the background, then restart into
+    /// it: at once if the user isn't using the app, otherwise as soon as they
+    /// switch away. The restart reopens in the background, where it was.
+    fn watch_for_updates(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(dir) = install::install_dir().filter(|_| install::is_installed_copy()) else { return };
+        mulch_update::clean_up(&dir);
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                let dir_ = dir.clone();
+                let installed = cx
+                    .background_spawn(async move {
+                        let release = mulch_update::newer_release(env!("CARGO_PKG_VERSION"))?;
+                        mulch_update::install(&release, &dir_).ok()
+                    })
+                    .await;
+                if installed.is_some() {
+                    this.update_in(cx, |app, window, cx| {
+                        app.update_ready = true;
+                        if !app.active {
+                            app.restart_for_update(window, cx);
+                        }
+                    })
+                    .ok();
+                    break;
+                }
+                cx.background_executor().timer(UPDATE_CHECK_INTERVAL).await;
+            }
+        })
+        .detach();
+    }
+
+    /// Starts the newly installed copy where this window is, then quits.
+    fn restart_for_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(exe) = install::install_dir().map(|dir| mulch_update::exe_in(&dir)) else { return };
+        let (bounds, maximized) = match window.window_bounds() {
+            WindowBounds::Maximized(b) | WindowBounds::Fullscreen(b) => (b, true),
+            WindowBounds::Windowed(b) => (b, false),
+        };
+        let minimized = self.hwnd.is_some_and(crate::window_size::is_minimized);
+        let restore = Restore {
+            x: f32::from(bounds.origin.x),
+            y: f32::from(bounds.origin.y),
+            width: f32::from(bounds.size.width),
+            height: f32::from(bounds.size.height),
+            state: if minimized {
+                WindowState::Minimized
+            } else if maximized {
+                WindowState::Maximized
+            } else {
+                WindowState::Normal
+            },
+        };
+        let started = std::process::Command::new(&exe).arg("--restore").arg(restore.to_arg()).spawn();
+        if started.is_ok() {
+            cx.quit();
+        }
+    }
+
     /// While the window is active, quietly re-checks which games are
     /// installed every few seconds, so installs and uninstalls show up on
     /// their own. A check is a ~0.1 s scan on a background thread.
@@ -901,6 +992,14 @@ impl MulchApp {
                 let hwnd = handle.hwnd.get();
                 crate::window_size::install(hwnd);
                 self.hwnd = Some(hwnd);
+                if let Some(restore) = self.restore.take() {
+                    crate::window_size::show_behind_foreground(
+                        hwnd,
+                        (restore.x, restore.y, restore.width, restore.height),
+                        restore.state == WindowState::Maximized,
+                        restore.state == WindowState::Minimized,
+                    );
+                }
             }
         }
         if let Some(hwnd) = self.hwnd {

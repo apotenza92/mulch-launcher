@@ -12,8 +12,9 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClientRect, GetWindowRect, MINMAXINFO, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SetWindowPos, WM_GETMINMAXINFO,
-    WM_SIZING, WMSZ_BOTTOMLEFT, WMSZ_LEFT, WMSZ_TOPLEFT,
+    GetClientRect, GetForegroundWindow, GetWindowRect, IsIconic, MINMAXINFO, SW_SHOWMAXIMIZED, SW_SHOWMINNOACTIVE,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetForegroundWindow, SetWindowPos,
+    ShowWindow, WM_GETMINMAXINFO, WM_SIZING, WMSZ_BOTTOMLEFT, WMSZ_LEFT, WMSZ_TOPLEFT,
 };
 
 /// Minimum width of the window's content.
@@ -153,4 +154,55 @@ fn to_device(hwnd: HWND, logical: f32) -> i32 {
 
 fn to_logical(hwnd: HWND, device: i32) -> f32 {
     device as f32 / scale(hwnd)
+}
+
+/// Shows a window that was created hidden, at `bounds` (logical pixels: x, y,
+/// width, height) and in the given state, just behind whichever window the
+/// user is using, without taking focus: so a copy restarted for an update
+/// appears exactly where the old one was, in the background.
+pub fn show_behind_foreground(hwnd: isize, bounds: (f32, f32, f32, f32), maximized: bool, minimized: bool) {
+    let hwnd = HWND(hwnd as _);
+    let (x, y, w, h) = bounds;
+    let foreground = unsafe { GetForegroundWindow() };
+    let after = (!foreground.is_invalid() && foreground != hwnd).then_some(foreground);
+    let order = if after.is_none() { SWP_NOZORDER } else { Default::default() };
+    unsafe {
+        // Place it (still hidden) where the old one was.
+        let _ = SetWindowPos(
+            hwnd,
+            after,
+            to_device(hwnd, x),
+            to_device(hwnd, y),
+            to_device(hwnd, w),
+            to_device(hwnd, h),
+            SWP_NOACTIVATE | order,
+        );
+        if minimized {
+            let _ = ShowWindow(hwnd, SW_SHOWMINNOACTIVE);
+        } else if maximized {
+            // Windows has no maximise-without-activating: maximise, give focus
+            // back if it was taken, and drop it back behind.
+            let _ = ShowWindow(hwnd, SW_SHOWMAXIMIZED);
+            // If that took focus, hand it straight back to the user's window.
+            if let Some(previous) = after {
+                if GetForegroundWindow() == hwnd {
+                    let _ = SetForegroundWindow(previous);
+                }
+            }
+            let _ = SetWindowPos(hwnd, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | order);
+        } else {
+            let _ = SetWindowPos(
+                hwnd,
+                after,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW | order,
+            );
+        }
+    }
+}
+pub fn is_minimized(hwnd: isize) -> bool {
+    unsafe { IsIconic(HWND(hwnd as _)) }.as_bool()
 }

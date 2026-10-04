@@ -5,4 +5,5 @@
 pub mod install;
 pub mod launch;
 pub mod layout;
+pub mod restore;
 pub mod scan;

@@ -4,6 +4,7 @@ mod assets;
 mod ui;
 mod window_size;
 
+use mulch_launcher::restore::Restore;
 use mulch_launcher::{install, scan};
 
 fn main() {
@@ -56,7 +57,10 @@ fn main() {
             install::adopt_legacy_data(&data, false);
         }
     }
-    ui::run();
+    // Restarted after an update: reopen where the old copy was.
+    let restore =
+        args.iter().position(|a| a == "--restore").and_then(|ix| args.get(ix + 1)).and_then(|a| Restore::from_arg(a));
+    ui::run(restore);
 }
 
 /// `MulchLauncher --scan`: prints everything found and how long it took.

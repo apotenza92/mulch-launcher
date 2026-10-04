@@ -1,0 +1,12 @@
+[package]
+name = "mulch-update"
+version = "0.1.0"
+description = "Self-updating for MulchLauncher, from its GitHub releases"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+serde_json = { workspace = true }
+ureq = { workspace = true }
+sha2 = "0.10"
