@@ -361,7 +361,9 @@ impl MulchApp {
                 .top_0()
                 .left_0()
                 .size_full()
-                .occlude()
+                // Not blocking: a click elsewhere closes the card and still
+                // reaches what's under it, so clicking another game opens its
+                // card straight away. The card itself blocks clicks.
                 .on_mouse_down(MouseButton::Left, cx.listener(|app, _, _, cx| app.cancel_play(cx)))
                 .on_mouse_down(MouseButton::Right, cx.listener(|app, _, _, cx| app.cancel_play(cx)))
                 .child(
@@ -799,13 +801,14 @@ impl MulchApp {
             .into_any_element()
     }
 
-    fn tile(&self, ix: usize, game: &Game, layout: &GridLayout, cx: &mut Context<Self>) -> AnyElement {
+    fn tile(&self, ix: usize, game: &Game, layout: &GridLayout, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let (width, height) = (layout.tile_width, layout.tile_width * COVER_ASPECT);
 
         let play_game = game.clone();
 
-        let hovered = self.hovered_tile == Some(ix);
+        // The full name shows on hover only when it's cut short.
+        let show_full_name = self.hovered_tile == Some(ix) && name_is_cut_short(&game.name, width, window, cx);
         div()
             .id(("game", ix))
             .relative()
@@ -823,9 +826,10 @@ impl MulchApp {
             )
             .child(div().w(px(width)).h(px(height)).overflow_hidden().bg(theme.muted).child(artwork(game, width)))
             .child(
-                // One line, cut short with "…"; hovering shows the whole name
-                // in a pill on top, on one line, over the neighbouring tiles if
-                // it's long (drawn last so nothing covers it).
+                // One line, cut short with "…"; hovering one that's cut short
+                // shows the whole name in a pill whose text sits exactly over
+                // it, running over the neighbouring tiles (drawn last so
+                // nothing covers it).
                 div()
                     .relative()
                     .h(px(NAME_LINE_HEIGHT))
@@ -833,13 +837,14 @@ impl MulchApp {
                     .text_sm()
                     .font_medium()
                     .child(div().truncate().child(game.name.clone()))
-                    .when(hovered, |this| {
+                    .when(show_full_name, |this| {
                         this.child(
                             deferred(
                                 div()
                                     .absolute()
-                                    .top(px(-NAME_PILL_PADDING.1))
-                                    .left(px(-NAME_PILL_PADDING.0))
+                                    // Offset by padding and border, so the text lines up exactly.
+                                    .top(px(-NAME_PILL_PADDING.1 - 1.))
+                                    .left(px(-NAME_PILL_PADDING.0 - 1.))
                                     .px(px(NAME_PILL_PADDING.0))
                                     .py(px(NAME_PILL_PADDING.1))
                                     .whitespace_nowrap()
@@ -957,6 +962,15 @@ fn quick_tooltip(id: &'static str, text: &'static str, child: impl IntoElement) 
         .tooltip_show_delay(TOOLTIP_DELAY)
 }
 
+/// Whether a game's name (text_sm, medium weight) is too wide for its tile.
+fn name_is_cut_short(name: &str, width: f32, window: &Window, cx: &App) -> bool {
+    let font = Font { weight: FontWeight::MEDIUM, ..font(cx.theme().font_family.clone()) };
+    let run = TextRun { len: name.len(), font, color: Hsla::default(), background_color: None, underline: None, strikethrough: None };
+    let font_size = rems(0.875).to_pixels(window.rem_size());
+    let line = window.text_system().shape_line(SharedString::from(name.to_string()), font_size, &[run], None);
+    f32::from(line.width) > width
+}
+
 /// A full-width, left-aligned button for the play card.
 fn card_button(id: &'static str, icon: IconName, label: impl Into<SharedString>) -> Button {
     Button::new(id).ghost().small().w_full().justify_start().icon(icon).label(label)
@@ -978,7 +992,7 @@ impl Render for MulchApp {
         let toolbar = self.toolbar(cx);
         // Rows built explicitly (rather than by wrapping) so each group starts a new row.
         let mut tiles: Vec<AnyElement> =
-            self.games.iter().enumerate().map(|(ix, game)| self.tile(ix, game, &layout, cx)).collect();
+            self.games.iter().enumerate().map(|(ix, game)| self.tile(ix, game, &layout, window, cx)).collect();
         let muted = cx.theme().muted_foreground;
         let mut sections = Vec::new();
         for section in &layout.sections {
