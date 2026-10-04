@@ -11,13 +11,13 @@ use std::path::{Path, PathBuf};
 
 /// The glyph of `icon` in `ink` (RGB), cached next to it. None if unreadable.
 pub fn glyph(icon: &Path, ink: [u8; 3]) -> Option<PathBuf> {
-    let name = format!("{}-glyph2-{:02x}{:02x}{:02x}.png", icon.file_stem()?.to_string_lossy(), ink[0], ink[1], ink[2]);
+    let name = format!("{}-glyph3-{:02x}{:02x}{:02x}.png", icon.file_stem()?.to_string_lossy(), ink[0], ink[1], ink[2]);
     let out = icon.with_file_name(name);
     if out.is_file() {
         return Some(out);
     }
     let image = image::open(icon).ok()?.to_rgba8();
-    trim_square(&make_glyph(&image, ink)).save(&out).ok()?;
+    smooth(&trim_square(&make_glyph(&image, ink))).save(&out).ok()?;
     Some(out)
 }
 
@@ -64,6 +64,24 @@ fn make_glyph(image: &RgbaImage, ink: [u8; 3]) -> RgbaImage {
     }
     out
 }
+
+/// Glyphs are shown small (about 21 px), and shrinking a big image while
+/// drawing it leaves jagged edges: so soften its edges a touch, then shrink
+/// it ahead of time with a high-quality filter to a size that's still crisp
+/// on high-DPI screens.
+fn smooth(glyph: &RgbaImage) -> RgbaImage {
+    let soft = image::imageops::blur(glyph, glyph.width() as f32 / 256.);
+    let mut out = image::imageops::resize(&soft, GLYPH_SIZE, GLYPH_SIZE, image::imageops::FilterType::Lanczos3);
+    // Keep the ink colour exact; only the alpha carries the shape.
+    let ink = glyph.pixels().find(|p| p[3] > 0).map_or([0, 0, 0], |p| [p[0], p[1], p[2]]);
+    for p in out.pixels_mut() {
+        *p = Rgba([ink[0], ink[1], ink[2], p[3]]);
+    }
+    out
+}
+
+/// The size glyphs are stored at.
+const GLYPH_SIZE: u32 = 64;
 
 /// Crops away empty space around the glyph (where the icon's tile was),
 /// keeping it square and centred so every glyph fills its button alike.
