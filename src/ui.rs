@@ -1232,9 +1232,9 @@ impl MulchApp {
                 }
             }))
             .child(
-                // Hovered, the poster stays put but is lit from the mouse, like a
-                // flashlight: a sheen and a brighter edge on the mouse's side, and a
-                // soft shadow cast away from it. Drawn after the other tiles, so the
+                // Every poster casts a soft drop shadow. Hovered, it stays put but is
+                // lit from the mouse: a sheen and a brighter edge on the mouse's side,
+                // and a deeper shadow. Then it's drawn after the other tiles, so the
                 // shadow falls over them.
                 div()
                     .relative()
@@ -1245,22 +1245,22 @@ impl MulchApp {
                         let bounds = self.hovered_bounds.clone();
                         slot.child(canvas(move |b, _, _| bounds.set(b), |_, _, _, _| {}).absolute().size_full())
                     })
-                    .child(
-                        deferred(
-                            div()
-                                .relative()
-                                .size_full()
-                                .overflow_hidden()
-                                .rounded(px(TILE_RADIUS))
-                                .bg(theme.muted)
-                                .child(poster)
-                                .when(lift > 0., |frame| {
-                                    frame.child(sheen(lift, lx, ly)).child(rim(lift, lx, ly, shine))
-                                })
-                                .shadow(cast_shadow(lift, lx, ly, dark)),
-                        )
-                        .with_priority(0),
-                    ),
+                    .child({
+                        let frame = div()
+                            .relative()
+                            .size_full()
+                            .overflow_hidden()
+                            .rounded(px(TILE_RADIUS))
+                            .bg(theme.muted)
+                            .child(poster)
+                            .when(lift > 0., |frame| frame.child(sheen(lift, lx, ly)).child(rim(lift, lx, ly, shine)))
+                            .shadow(cast_shadow(lift, lx, ly, dark));
+                        if lift > 0. {
+                            deferred(frame).with_priority(0).into_any_element()
+                        } else {
+                            frame.into_any_element()
+                        }
+                    }),
             )
             // The buttons sit above the poster, not clipped to its edges.
             .children(actions.map(|actions| {
@@ -1431,24 +1431,23 @@ const RIM_LIGHT: f32 = 0.38;
 const RIM_BLUR: f32 = 16.;
 const RIM_LEAN: f32 = 4.;
 
-/// The shadow a hovered poster casts, as if lit from the mouse: it falls a
-/// little below the poster and away from the light.
+/// Every poster's drop shadow, so it stands off the background: subtle at
+/// rest, deeper and softer as it lights up on hover (`lift` 0 to 1), when
+/// it also leans a little away from the light (the mouse).
 fn cast_shadow(lift: f32, lx: f32, ly: f32, dark: bool) -> Vec<BoxShadow> {
-    let light = lift.clamp(0., 1.);
-    let strength = if dark { 0.65 } else { 0.35 };
+    let lit = lift.clamp(0., 1.);
+    let between = |rest: f32, hovered: f32| rest + (hovered - rest) * lit;
+    let (rest, hovered) = if dark { (0.45, 0.7) } else { (0.16, 0.32) };
     vec![BoxShadow {
-        color: gpui_kit::black().opacity(strength * light),
-        offset: point(px(-SHADOW_REACH * lx * light), px((SHADOW_DROP - SHADOW_REACH * ly) * light)),
-        blur_radius: px(SHADOW_BLUR * light),
-        spread_radius: px(-4. * light),
+        color: gpui_kit::black().opacity(between(rest, hovered)),
+        offset: point(px(-SHADOW_REACH * lx * lit), px(between(4., 14.) - SHADOW_REACH * ly * lit)),
+        blur_radius: px(between(12., 32.)),
+        spread_radius: px(between(-2., -4.)),
         inset: false,
     }]
 }
-/// How far the cast shadow falls below the poster, how far it swings away
-/// from the light, and how soft it is.
-const SHADOW_DROP: f32 = 8.;
-const SHADOW_REACH: f32 = 14.;
-const SHADOW_BLUR: f32 = 28.;
+/// How far a lit poster's shadow leans away from the light.
+const SHADOW_REACH: f32 = 5.;
 /// How quickly the light follows the mouse, in seconds (time constant).
 const LIGHT_EASE: f32 = 0.1;
 /// How quickly a hovered poster lights up (and its buttons appear).
