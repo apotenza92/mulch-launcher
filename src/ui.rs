@@ -2,6 +2,7 @@
 //! the left, buttons on the right) and every detected game as a tile, grouped
 //! by when it was last played and sized so they all fit if they can.
 
+use mulch_launcher::install;
 use mulch_launcher::launch;
 use mulch_launcher::layout::{
     COVER_ASPECT, DEFAULT_SIZE, GRID_GAP, GridLayout, HEADING_HEIGHT, TILE_SIZES, grid_width, layout as grid_layout,
@@ -48,6 +49,90 @@ pub fn run() {
         gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| MulchApp::new(window, cx)))
             .expect("failed to open the window");
     });
+}
+
+/// The one window shown when the downloaded copy is run: an "Add to desktop"
+/// checkbox (on by default) and Install. Closing it installs nothing.
+pub fn run_installer() {
+    gpui_kit::application().with_assets(gpui_kit::assets::Assets).run(move |cx| {
+        gpui_kit::init(cx);
+        Theme::change(ThemeMode::Dark, None, cx);
+        let options = WindowOptions {
+            titlebar: Some(TitlebarOptions { title: Some(APP_NAME.into()), ..TitleBar::title_bar_options() }),
+            app_owns_titlebar_drag: true,
+            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(440.), px(250.)), cx))),
+            is_resizable: false,
+            app_id: Some(APP_NAME.into()),
+            ..Default::default()
+        };
+        gpui_kit::open_window(options, cx, |_, cx| cx.new(|_| Installer { desktop: true, error: None }))
+            .expect("failed to open the window");
+    });
+}
+
+struct Installer {
+    desktop: bool,
+    error: Option<String>,
+}
+
+impl Installer {
+    fn install(&mut self, cx: &mut Context<Self>) {
+        let result = std::env::current_exe().and_then(|download| {
+            let installed = install::install(self.desktop)?;
+            install::hand_over(&installed, &download)
+        });
+        match result {
+            Ok(()) => cx.quit(),
+            Err(err) => {
+                self.error = Some(format!("Couldn't install: {err}"));
+                cx.notify();
+            }
+        }
+    }
+}
+
+impl Render for Installer {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        v_flex()
+            .size_full()
+            .bg(theme.background)
+            .child(TitleBar::new().bg(theme.background).border_color(theme.background))
+            .child(
+                v_flex()
+                    .flex_1()
+                    .px_6()
+                    .pb_6()
+                    .gap_4()
+                    .child(div().text_xl().font_semibold().child(format!("Install {APP_NAME}")))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(muted)
+                            .child("Every installed game, from every launcher. Installs just for you; it'll be in your Start menu."),
+                    )
+                    .child(
+                        Checkbox::new("desktop")
+                            .checked(self.desktop)
+                            .label("Add to desktop")
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.desktop = *checked;
+                                cx.notify();
+                            })),
+                    )
+                    .children(self.error.clone().map(|error| div().text_sm().text_color(theme.danger).child(error)))
+                    .child(div().flex_1())
+                    .child(
+                        h_flex().justify_end().child(
+                            Button::new("install")
+                                .primary()
+                                .label("Install")
+                                .on_click(cx.listener(|this, _, _, cx| this.install(cx))),
+                        ),
+                    ),
+            )
+    }
 }
 
 struct MulchApp {

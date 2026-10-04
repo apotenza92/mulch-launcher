@@ -20,13 +20,16 @@ fn main() {
         let _ = install::uninstall();
         return;
     }
-    // Run from anywhere else (e.g. Downloads): install silently, then hand
-    // over to the installed copy. Nothing is saved next to this copy.
+    // Run from anywhere else (e.g. Downloads): the small install window.
+    // Nothing is saved next to this copy.
     if !install::is_dev_build() && !install::is_installed_copy() {
-        if let Err(err) = install::install().and_then(|installed| install::relaunch(&installed)) {
-            message_box(&format!("MulchLauncher couldn't install: {err}"));
-        }
+        ui::run_installer();
         return;
+    }
+    // Started by the installer: remove the downloaded copy once it closes.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(download) = args.iter().position(|a| a == "--remove-download").and_then(|ix| args.get(ix + 1)) {
+        install::remove_download(download.into());
     }
     // Development builds keep their own data in `target`; copy in the data
     // older versions kept in AppData, leaving it there.
@@ -36,14 +39,6 @@ fn main() {
         }
     }
     ui::run();
-}
-
-fn message_box(text: &str) {
-    use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
-    use windows::core::HSTRING;
-    unsafe {
-        MessageBoxW(None, &HSTRING::from(text), &HSTRING::from("MulchLauncher"), MB_OK | MB_ICONERROR);
-    }
 }
 
 /// `MulchLauncher --scan`: prints everything found and how long it took.

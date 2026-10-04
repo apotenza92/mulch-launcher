@@ -103,7 +103,7 @@ to the taskbar; right-click it to pin.)
 
 Everything it saves lives in that folder's `data` subfolder: settings, play
 history, games added by hand, and cached posters and icons. Uninstalling from
-Windows Settings removes, in full: the folder, the Start menu shortcut, a
+Windows Settings removes, in full: the folder, the Start menu and desktop shortcuts, a
 taskbar pin if you made one, the Installed apps entry, Windows' own cache
 entries for the program, and folders older versions used in AppData. Nothing
 is left behind.
