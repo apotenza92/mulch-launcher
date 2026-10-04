@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3f7bff"/>
+      <stop offset="1" stop-color="#9a5cf5"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.35"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="leaf" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#b8f5a0"/>
+      <stop offset="1" stop-color="#5fd38a"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#tile)"/>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#shine)"/>
+  <!-- A leaf sprouting from the top of the play button -->
+  <path d="M100 74 C 96 44, 122 26, 152 28 C 150 58, 128 76, 100 74 Z" fill="url(#leaf)"/>
+  <path d="M100 74 C 112 58, 126 46, 142 38" fill="none" stroke="#3aa86b" stroke-width="5" stroke-linecap="round"/>
+  <!-- Play -->
+  <path d="M92 84 C 92 74, 102 68, 111 73 L 186 117 C 195 122, 195 134, 186 139 L 111 183 C 102 188, 92 182, 92 172 Z" fill="#ffffff"/>
+</svg>
