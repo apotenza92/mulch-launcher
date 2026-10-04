@@ -1261,6 +1261,7 @@ impl MulchApp {
                                 .child(poster)
                                 // A soft sheen on the side the mouse is on.
                                 .when(hovered, |frame| frame.child(sheen(dx, dy)))
+                                .when(lift > 0., |frame| frame.child(rim(dx, dy, lift)))
                                 // Lifts, leans toward the mouse, and casts its shadow away from it.
                                 .left(px(-grow_x + TILT_SHIFT * dx * lift))
                                 .top(px(-grow_y + TILT_SHIFT * dy * lift))
@@ -1439,8 +1440,8 @@ fn blend_colors(from: &ThemeColor, to: &ThemeColor, t: f32) -> ThemeColor {
 const TILE_RADIUS: f32 = 8.;
 
 /// How far a hovered poster leans toward the mouse, and its shadow away.
-const TILT_SHIFT: f32 = 3.;
-const TILT_SHADOW: f32 = 6.;
+const TILT_SHIFT: f32 = 7.;
+const TILT_SHADOW: f32 = 10.;
 /// How quickly the tilt follows the mouse, in seconds (time constant).
 const TILT_EASE: f32 = 0.12;
 
@@ -1457,6 +1458,30 @@ fn sheen(dx: f32, dy: f32) -> Div {
     ))
 }
 
+/// A soft light around a hovered poster's edge, a little brighter on the
+/// side the mouse is on, so it reads as catching the light.
+fn rim(dx: f32, dy: f32, lift: f32) -> Div {
+    let light = lift.clamp(0., 1.);
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .rounded(px(TILE_RADIUS))
+        .border_1()
+        .border_color(gpui_kit::white().opacity(0.22 * light))
+        .shadow(vec![BoxShadow {
+            color: gpui_kit::white().opacity(RIM_LIGHT * light),
+            offset: point(px(-RIM_LEAN * dx), px(-RIM_LEAN * dy)),
+            blur_radius: px(RIM_BLUR),
+            spread_radius: px(0.),
+            inset: true,
+        }])
+}
+/// The rim's brightness, softness, and how far it leans toward the mouse.
+const RIM_LIGHT: f32 = 0.38;
+const RIM_BLUR: f32 = 16.;
+const RIM_LEAN: f32 = 4.;
 /// How quickly a hovered poster comes out.
 /// A hovered poster grows by this share of its width on each side.
 const HOVER_GROW: f32 = 0.06;
@@ -1745,7 +1770,7 @@ const GLASS_PRESS_GROW: f32 = 18.;
 const BUTTON_SPRING: std::time::Duration = std::time::Duration::from_millis(480);
 const BUTTON_PRESS_SPRING: std::time::Duration = std::time::Duration::from_millis(340);
 /// The buttons' layer moves this much more than the poster as it tilts (parallax).
-const BUTTON_PARALLAX: f32 = 2.5;
+const BUTTON_PARALLAX: f32 = 2.;
 const GLYPH_FILL: f32 = 0.5;
 
 /// Glyph ink: white on dark glass, near-black on light glass (as the buttons' icons).
