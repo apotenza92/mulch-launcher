@@ -615,7 +615,7 @@ impl MulchApp {
             .left_0()
             .size_full()
             .child(play)
-            .child(h_flex().absolute().left_0().right_0().bottom(px(GLASS_INSET)).justify_center().children(right))
+            .child(h_flex().absolute().left_0().right_0().bottom(px(GLASS_INSET)).justify_center().children(action))
     }
     fn apply_art(&mut self, games: Vec<Game>, launchers: Vec<Launcher>, cx: &mut Context<Self>) {
         // Icons may have been added or replaced with trimmed copies.
