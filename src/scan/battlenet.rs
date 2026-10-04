@@ -70,12 +70,12 @@ pub fn scan(entries: &[UninstallEntry]) -> Vec<Game> {
             name: name.to_string(),
             platform: Platform::BattleNet,
             install_dir: Some(install_dir),
-            launch: Action::Exe { path: client.clone(), args: vec![format!("--exec=launch {code}")], working_dir: None },
-            uninstall: registry::exe_from_command(&entry.uninstall_string).map(|exe| Action::Exe {
-                path: exe,
-                args: command_args(&entry.uninstall_string),
-                working_dir: None,
-            }),
+            // Same form Playnite uses: `Battle.net.exe --exec="launch <code>"`.
+            launch: Action::CommandLine(format!("\"{}\" --exec=\"launch {code}\"", client.display())),
+            // Battle.net's uninstall string has quoted, spaced arguments
+            // (`--displayname="World of Warcraft"`), so run it verbatim.
+            uninstall: (!entry.uninstall_string.trim().is_empty())
+                .then(|| Action::CommandLine(entry.uninstall_string.trim().to_string())),
             art: None,
             icon_source: super::art::icon_path(&entry.display_icon),
         });
@@ -92,18 +92,6 @@ fn uid(uninstall_string: &str) -> Option<&str> {
     let start = lower.find("--uid=")? + "--uid=".len();
     let rest = &uninstall_string[start..];
     Some(rest.split_whitespace().next()?.trim_matches('"'))
-}
-
-/// The arguments after the executable in a command line.
-fn command_args(command: &str) -> Vec<String> {
-    let command = command.trim();
-    let rest = if let Some(stripped) = command.strip_prefix('"') {
-        stripped.split_once('"').map(|(_, rest)| rest).unwrap_or("")
-    } else {
-        let lower = command.to_ascii_lowercase();
-        lower.find(".exe").map(|i| &command[i + 4..]).unwrap_or("")
-    };
-    rest.split_whitespace().map(|a| a.trim_matches('"').to_string()).collect()
 }
 
 fn client_exe(entries: &[UninstallEntry]) -> Option<PathBuf> {
@@ -124,6 +112,5 @@ mod tests {
     fn reads_uid_from_uninstall_command() {
         let cmd = r#""C:\ProgramData\Battle.net\Agent\Blizzard Uninstaller.exe" --lang=enUS --uid=prometheus --displayname="Overwatch""#;
         assert_eq!(uid(cmd), Some("prometheus"));
-        assert_eq!(command_args(cmd)[0], "--lang=enUS");
     }
 }

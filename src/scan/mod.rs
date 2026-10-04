@@ -62,6 +62,9 @@ pub enum Action {
     Exe { path: PathBuf, args: Vec<String>, working_dir: Option<PathBuf> },
     /// A Microsoft Store / Xbox app, by its AppUserModelId.
     StoreApp(String),
+    /// A complete command line, run exactly as written (e.g. an uninstall
+    /// string from the registry, whose quoting must be kept intact).
+    CommandLine(String),
 }
 
 #[derive(Clone, Debug, Serialize)]

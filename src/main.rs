@@ -22,8 +22,13 @@ fn main() {
 }
 
 /// `MulchLauncher --scan`: prints everything found and how long it took.
+/// `--scan --json` prints the full details, including launch and uninstall commands.
 fn print_scan() {
     let result = scan::scan_all();
+    if std::env::args().any(|a| a == "--json") {
+        println!("{}", serde_json::to_string_pretty(&result.games).unwrap_or_default());
+        return;
+    }
     for game in &result.games {
         println!(
             "{:<10} {:<45} {}",
