@@ -41,6 +41,20 @@ few hours of gaming with their mates to *just work*.
 Detection rules for Battle.net, Rockstar, Epic filtering and Ubisoft links follow
 [Playnite's library extensions](https://github.com/JosefNemec/PlayniteExtensions).
 
+## Artwork
+
+Posters are always shown whole, never cropped or stretched.
+
+- Steam: its own local library art.
+- Xbox / Microsoft Store: the "Poster" image from Microsoft's public store
+  catalogue.
+- Everything else: Steam's poster for a game with exactly the same name;
+  for Ubisoft, Ubisoft's own thumbnail if the game isn't on Steam.
+- Otherwise the game's icon.
+
+Fetched posters are cached in `%LOCALAPPDATA%\MulchLauncher\posters`; games
+with no poster anywhere are only re-checked weekly. No logins or API keys.
+
 ## Principles
 
 1. **Zero setup.** If a user has to configure it, it's a bug.

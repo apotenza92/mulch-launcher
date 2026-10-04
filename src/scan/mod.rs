@@ -10,6 +10,7 @@ mod epic;
 mod gog;
 mod launchers;
 pub mod manual;
+pub mod posters;
 mod registry;
 mod rockstar;
 mod steam;

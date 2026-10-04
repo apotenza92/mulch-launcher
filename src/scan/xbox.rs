@@ -94,9 +94,9 @@ fn scan_packages() -> windows::core::Result<Vec<Game>> {
             install_dir: Some(visible_dir),
             launch: Action::StoreApp(app_id),
             uninstall: None,
-            art: logo(&install_dir, &config)
-                .map(Art::Cover)
-                .or_else(|| manifest_logo(&install_dir).map(Art::Icon)),
+            // Square logos, not posters: shown as icons until a real poster
+            // is fetched (see posters.rs).
+            art: logo(&install_dir, &config).or_else(|| manifest_logo(&install_dir)).map(Art::Icon),
             icon_source: None,
         });
     }

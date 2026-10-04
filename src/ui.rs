@@ -5,7 +5,7 @@
 use mulch_launcher::install;
 use mulch_launcher::launch;
 use mulch_launcher::layout::{COVER_ASPECT, GRID_GAP, GridLayout, fit_tiles};
-use mulch_launcher::scan::{self, Action, Art, Game, Launcher, Platform, ScanResult, art, manual};
+use mulch_launcher::scan::{self, Action, Art, Game, Launcher, Platform, ScanResult, art, manual, posters};
 use mulch_launcher::settings::Settings;
 use gpui_kit::component::button::*;
 use gpui_kit::component::checkbox::Checkbox;
@@ -101,11 +101,21 @@ impl MulchApp {
             let (mut games, mut launchers) = (result.games.clone(), result.launchers.clone());
             this.update(cx, |app, cx| app.apply(result, cx)).ok();
 
-            let (games, launchers) = cx
+            let (mut games, launchers) = cx
                 .background_spawn(async move {
                     art::fill_missing(&mut games);
                     art::fill_launchers(&mut launchers);
                     (games, launchers)
+                })
+                .await;
+            this.update(cx, |app, cx| app.apply_art(games.clone(), launchers.clone(), cx)).ok();
+
+            // Posters for games whose launcher keeps none on disk: cached after
+            // the first run, fetched online otherwise, so they arrive last.
+            let games = cx
+                .background_spawn(async move {
+                    posters::fill_missing(&mut games);
+                    games
                 })
                 .await;
             this.update(cx, |app, cx| app.apply_art(games, launchers, cx)).ok();
@@ -531,12 +541,13 @@ const FIT_SLACK: f32 = 8.;
 /// Width kept free on the right so a scrollbar never overlaps the last column.
 const SCROLLBAR_ROOM: f32 = 8.;
 
-/// Cover art fills the tile. Icons (already trimmed of transparent padding)
+/// Cover art fills as much of the tile as it can without cropping. Icons (already trimmed of transparent padding)
 /// sit centred at a fixed share of the tile, so they all look the same size.
 /// No words inside the tile: the name is always shown underneath.
 fn artwork(game: &Game, width: f32) -> AnyElement {
     match &game.art {
-        Some(Art::Cover(path)) => img(path.clone()).size_full().object_fit(ObjectFit::Cover).into_any_element(),
+        // Shown whole: scaled to fit inside the tile, never cropped or stretched.
+        Some(Art::Cover(path)) => img(path.clone()).size_full().object_fit(ObjectFit::Contain).into_any_element(),
         Some(Art::Icon(path)) => div()
             .size_full()
             .flex()
