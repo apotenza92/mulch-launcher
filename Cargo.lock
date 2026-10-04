@@ -4006,6 +4006,7 @@ dependencies = [
 name = "mulch-art"
 version = "0.1.0"
 dependencies = [
+ "image",
  "mulch-core",
  "png 0.17.16",
  "windows 0.61.3",

@@ -2,6 +2,8 @@
 //! icon, extracted by Windows' shell at the largest size available and cached
 //! as a PNG so it only costs time once per game.
 
+mod accent;
+pub use accent::accent;
 use mulch_core::{Art, Game, Launcher};
 use std::collections::hash_map::DefaultHasher;
 use std::ffi::c_void;

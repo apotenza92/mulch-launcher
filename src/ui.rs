@@ -259,6 +259,15 @@ struct MulchApp {
     /// element animations, so one can't restart the other.
     slides: HashMap<String, Tween>,
     lifts: HashMap<String, Tween>,
+    /// Games being removed, fading out before they go.
+    leaving: HashMap<String, Tween>,
+    /// Each poster's accent colour, for tinting its glow.
+    accents: HashMap<PathBuf, Hsla>,
+    /// A theme change in progress: the colours it's blending from and to.
+    theme_fade: Option<(ThemeColor, ThemeColor, Tween)>,
+    /// When games first appeared: until shortly after, tiles enter one after
+    /// another; later additions just fade straight in.
+    first_shown: Option<std::time::Instant>,
     /// Set by an action's click, so the tile under it doesn't also react.
     action_clicked: bool,
     /// Set by a tile's click, so the grid around it doesn't close it again.
@@ -304,6 +313,10 @@ impl MulchApp {
             revealed: None,
             slides: HashMap::new(),
             lifts: HashMap::new(),
+            leaving: HashMap::new(),
+            accents: HashMap::new(),
+            theme_fade: None,
+            first_shown: None,
             action_clicked: false,
             tile_clicked: false,
             history: History::load(),
@@ -315,7 +328,7 @@ impl MulchApp {
                 // Follow Windows switching between light and dark, when set to.
                 cx.observe_window_appearance(window, |app, window, cx| {
                     if app.settings.theme == ThemeChoice::System {
-                        app.apply_theme(window, cx);
+                        app.fade_theme(window, cx);
                     }
                 }),
                 cx.observe_window_activation(window, |app, window, cx| {
@@ -406,6 +419,9 @@ impl MulchApp {
         // after the scan), so a rescan doesn't blank every tile for a moment.
         let mut shown: HashMap<String, Art> = self.games.drain(..).filter_map(|g| Some((g.id, g.art?))).collect();
         self.games = result.games;
+        if self.first_shown.is_none() && !self.games.is_empty() {
+            self.first_shown = Some(std::time::Instant::now());
+        }
         for game in &mut self.games {
             if !matches!(game.art, Some(Art::Cover(_))) {
                 if let Some(art) = shown.remove(&game.id) {
@@ -541,7 +557,46 @@ impl MulchApp {
                 launcher.icon = Some(icon.clone());
             }
         }
+        self.find_accents(cx);
         cx.notify();
+    }
+
+    /// Works out the accent colour of posters that don't have one yet, in the background.
+    fn find_accents(&mut self, cx: &mut Context<Self>) {
+        let wanted: Vec<PathBuf> = self
+            .games
+            .iter()
+            .filter_map(|g| match &g.art {
+                Some(Art::Cover(path) | Art::Icon(path)) => Some(path.clone()),
+                None => None,
+            })
+            .filter(|path| !self.accents.contains_key(path))
+            .collect();
+        if wanted.is_empty() {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let found = cx
+                .background_spawn(async move {
+                    wanted
+                        .into_iter()
+                        .filter_map(|path| {
+                            let [r, g, b] = art::accent(&path)?;
+                            Some((
+                                path,
+                                Hsla::from(Rgba { r: r as f32 / 255., g: g as f32 / 255., b: b as f32 / 255., a: 1. }),
+                            ))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            this.update(cx, |app, cx| {
+                app.accents.extend(found);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Opens "Add game manually" and starts looking for games on this PC
@@ -607,9 +662,30 @@ impl MulchApp {
         .detach();
     }
 
+    /// Fades the game out, then removes it.
     fn remove_manual(&mut self, exe: PathBuf, cx: &mut Context<Self>) {
-        let _ = manual::remove(&exe);
-        self.rescan(cx);
+        let id = self
+            .games
+            .iter()
+            .find(|g| matches!(&g.launch, Action::Exe { path, .. } if *path == exe))
+            .map(|g| g.id.clone());
+        if let Some(id) = &id {
+            Tween::go(&mut self.leaving, id, 1., LEAVE_DURATION);
+            cx.notify();
+        }
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(LEAVE_DURATION).await;
+            let _ = manual::remove(&exe);
+            this.update(cx, |app, cx| {
+                if let Some(id) = id {
+                    app.games.retain(|g| g.id != id);
+                    app.leaving.remove(&id);
+                }
+                app.rescan(cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn title_bar(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -748,8 +824,35 @@ impl MulchApp {
     fn cycle_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settings.theme = self.settings.theme.next();
         self.settings.save();
+        self.fade_theme(window, cx);
+    }
+
+    /// Switches to the chosen theme, blending the colours over a moment.
+    fn fade_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let from = self
+            .theme_fade
+            .as_ref()
+            .map_or_else(|| cx.theme().colors, |(from, to, fade)| blend_colors(from, to, fade.now()));
         self.apply_theme(window, cx);
+        let to = cx.theme().colors;
+        let fade = Tween { from: 0., to: 1., since: std::time::Instant::now(), duration: THEME_FADE };
+        self.theme_fade = Some((from, to, fade));
+        Theme::global_mut(cx).colors = from;
         cx.notify();
+    }
+
+    /// Steps a theme fade on (each frame while one is running).
+    fn step_theme_fade(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((from, to, fade)) = self.theme_fade else { return };
+        let colors = if fade.done() { to } else { blend_colors(&from, &to, fade.now()) };
+        let theme = Theme::global_mut(cx);
+        theme.colors = colors;
+        theme.tokens.background = colors.background.into();
+        if fade.done() {
+            self.theme_fade = None;
+        } else {
+            window.request_animation_frame();
+        }
     }
 
     /// The narrowest the window can be with the whole toolbar still showing.
@@ -934,7 +1037,18 @@ impl MulchApp {
         let hovered = self.hovered_tile == Some(ix);
         let (dx, dy) = if hovered { self.tilt } else { (0., 0.) };
         let show_full_name = hovered && name_is_cut_short(&game.name, width, window, cx);
-        let glow = if theme.mode.is_dark() { gpui_kit::white().opacity(0.25) } else { gpui_kit::black().opacity(0.35) };
+        // The glow takes the poster's own colour where it has one.
+        let accent = match &game.art {
+            Some(Art::Cover(path) | Art::Icon(path)) => self.accents.get(path).copied(),
+            None => None,
+        };
+        let glow = match accent {
+            Some(color) => with_alpha(color, if theme.mode.is_dark() { 0.55 } else { 0.5 }),
+            None if theme.mode.is_dark() => gpui_kit::white().opacity(0.25),
+            None => gpui_kit::black().opacity(0.35),
+        };
+        let leaving = Tween::value(&self.leaving, &game.id);
+        let staggered = self.first_shown.is_none_or(|at| at.elapsed() < STAGGER_WINDOW);
         div()
             .id(("game", ix))
             .relative()
@@ -1042,7 +1156,13 @@ impl MulchApp {
             .h(px(height + LABEL_HEIGHT))
             // Tiles fade and rise into place when they first appear, one
             // shortly after another.
-            .with_animation(("enter", ix), entrance(ix), |tile, t| tile.opacity(t).top(px(ENTER_RISE * (1. - t))))
+            // Removed: fades and sinks away.
+            .when(leaving > 0., |tile| tile.opacity(1. - leaving).top(px(ENTER_RISE * leaving)))
+            .with_animation(
+                ElementId::Name(format!("enter-{}", game.id).into()),
+                entrance(if staggered { ix } else { 0 }),
+                |tile, t| tile.opacity(t).top(px(ENTER_RISE * (1. - t))),
+            )
             .into_any_element()
     }
 }
@@ -1078,11 +1198,56 @@ impl Tween {
         tweens.insert(id.to_string(), Tween { from, to, since: std::time::Instant::now(), duration });
     }
 
+    /// Whether any are still moving (keeps finished ones).
+    fn tidy_up(tweens: &mut HashMap<String, Tween>) -> bool {
+        tweens.values().any(|t| !t.done())
+    }
+
     /// Forgets finished tweens resting at 0; returns whether any are still moving.
     fn tidy(tweens: &mut HashMap<String, Tween>) -> bool {
         tweens.retain(|_, t| !(t.done() && t.to == 0.));
         tweens.values().any(|t| !t.done())
     }
+}
+
+/// How long a theme change blends, and a removed game fades.
+const THEME_FADE: std::time::Duration = std::time::Duration::from_millis(320);
+const LEAVE_DURATION: std::time::Duration = std::time::Duration::from_millis(260);
+/// How long after games first appear that tiles still enter one by one.
+const STAGGER_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Theme colours part-way between two themes (`t` from 0 to 1).
+fn blend_colors(from: &ThemeColor, to: &ThemeColor, t: f32) -> ThemeColor {
+    let mix = |a: Hsla, b: Hsla| {
+        let (a, b) = (Rgba::from(a), Rgba::from(b));
+        let m = |x: f32, y: f32| x + (y - x) * t;
+        Hsla::from(Rgba { r: m(a.r, b.r), g: m(a.g, b.g), b: m(a.b, b.b), a: m(a.a, b.a) })
+    };
+    let mut out = *to;
+    macro_rules! blend { ($($field:ident),*) => { $(out.$field = mix(from.$field, to.$field);)* } }
+    blend!(
+        background,
+        foreground,
+        muted,
+        muted_foreground,
+        popover,
+        popover_foreground,
+        border,
+        list_hover,
+        title_bar,
+        primary,
+        primary_foreground,
+        primary_hover,
+        secondary,
+        secondary_foreground,
+        secondary_hover,
+        accent,
+        accent_foreground,
+        danger,
+        ring,
+        input
+    );
+    out
 }
 
 /// Corner rounding for posters, panels and cards.
@@ -1379,7 +1544,8 @@ fn run_action(action: &Action, name: &str, window: &mut Window, cx: &mut App) {
 impl Render for MulchApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.update_min_width(window);
-        if Tween::tidy(&mut self.slides) | Tween::tidy(&mut self.lifts) {
+        self.step_theme_fade(window, cx);
+        if Tween::tidy(&mut self.slides) | Tween::tidy(&mut self.lifts) | Tween::tidy_up(&mut self.leaving) {
             window.request_animation_frame();
         }
         let viewport = window.viewport_size();
