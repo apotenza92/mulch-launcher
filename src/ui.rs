@@ -439,7 +439,7 @@ impl MulchApp {
         cx.notify();
     }
 
-    /// Glass buttons over a hovered poster: Play in the middle; along the bottom, Show in folder on the left
+    /// Glass buttons over a hovered poster: Play, big, centred above the bottom row; along the bottom, Show in folder on the left
     /// and the game's other action on the right: Show in its launcher, or for
     /// games the user added, Remove (which asks again first).
     fn poster_actions(&self, game: &Game, size: (f32, f32), cx: &mut Context<Self>) -> Div {
@@ -497,10 +497,11 @@ impl MulchApp {
             right = Some(with_tooltip(button, tip).into_any_element());
         }
 
-        // Play in the middle of the poster.
+        // Play, big, in the middle of the space above the bottom row.
         let (width, height) = size;
         let half = (GLASS_PLAY_BUTTON + GLASS_GROW) / 2.;
-        let (x, y) = (width / 2., height / 2.);
+        let row = GLASS_INSET + GLASS_BUTTON + GLASS_GROW;
+        let (x, y) = (width / 2., (height - row) / 2.);
         let g = game.clone();
         let play = glass_button("play", IconName::Play, GLASS_PLAY_BUTTON, false, dark).on_click(cx.listener(
             move |app, _, window, cx| {
@@ -1309,7 +1310,7 @@ const GROUP_NAMES: [&str; 3] = ["Played in the last week", "Played in the last m
 const ICON_SHARE: f32 = 0.6;
 /// Glass buttons over a hovered poster: sizes, and distance from its edges.
 const GLASS_BUTTON: f32 = 42.;
-const GLASS_PLAY_BUTTON: f32 = 56.;
+const GLASS_PLAY_BUTTON: f32 = 76.;
 const GLASS_INSET: f32 = 14.;
 /// Space above and below the grid.
 const GRID_PADDING: f32 = 20.;
@@ -1506,14 +1507,15 @@ fn glass_button(id: &'static str, icon: IconName, size: f32, danger: bool, dark:
 /// A glass button around any content (e.g. a launcher's glyph).
 fn glass_button_with(id: &'static str, content: AnyElement, size: f32, danger: bool, dark: bool) -> Stateful<Div> {
     let (glass, ink, edge) = if dark {
-        (gpui_kit::black(), gpui_kit::white(), gpui_kit::white().opacity(0.35))
+        // Frosted charcoal rather than clear black.
+        (gpui_kit::hsla(240. / 360., 0.06, 0.16, 1.), gpui_kit::white(), gpui_kit::white().opacity(0.4))
     } else {
         (gpui_kit::white(), gpui_kit::black().opacity(0.8), gpui_kit::black().opacity(0.12))
     };
     let (fill, hover, ink, glow) = if danger {
         (gpui_kit::red().opacity(0.75), gpui_kit::red().opacity(0.95), gpui_kit::white(), gpui_kit::red().opacity(0.7))
     } else if dark {
-        (glass.opacity(0.45), glass.opacity(0.7), ink, gpui_kit::white().opacity(0.45))
+        (glass.opacity(0.72), glass.opacity(0.88), ink, gpui_kit::white().opacity(0.45))
     } else {
         (glass.opacity(0.7), glass.opacity(0.95), ink, gpui_kit::white().opacity(0.9))
     };
