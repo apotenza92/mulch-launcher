@@ -155,6 +155,8 @@ struct MulchApp {
     /// When each game was last played, for sorting most recent first.
     history: History,
     settings: Settings,
+    /// The theme button's tooltip text, shared with the tooltip so it updates on click.
+    theme_tip: Rc<Cell<&'static str>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -190,6 +192,7 @@ impl MulchApp {
             // Coming back to the window (e.g. after playing): re-sort so the
             // game just played is first.
             settings: Settings::load(),
+            theme_tip: Rc::default(),
             _subscriptions: vec![
                 // Follow Windows switching between light and dark, when set to.
                 cx.observe_window_appearance(window, |app, window, cx| {
@@ -323,38 +326,33 @@ impl MulchApp {
     }
 
     fn play_card(&self, pending: &PendingPlay, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        // Wide enough for "Play <name>" (up to a limit; longer names are cut short).
-        let mut label = format!("Play {}", pending.game.name);
-        let mut chars: Vec<char> = pending.game.name.chars().collect();
-        while text_width(&label, window, cx) + PLAY_LABEL_ROOM > PLAY_CARD_MAX_WIDTH && chars.len() > 1 {
-            chars.pop();
-            label = format!("Play {}…", chars.iter().collect::<String>().trim_end());
-        }
-        let card_width = (text_width(&label, window, cx) + PLAY_LABEL_ROOM).clamp(PLAY_CARD_WIDTH, PLAY_CARD_MAX_WIDTH);
+        // As wide as its longest entry needs: the full name is never cut short.
+        let label = format!("Play {}", pending.game.name);
+        let longest = [label.as_str(), "Show in Microsoft Store", "Show in folder"]
+            .iter()
+            .map(|text| text_width(text, window, cx))
+            .fold(0., f32::max);
+        let card_width = (longest + CARD_LABEL_ROOM).max(PLAY_CARD_MIN_WIDTH);
         let theme = cx.theme();
         let card = v_flex()
             .id("play-card")
             .occlude()
             .w(px(card_width))
             .p(px(PLAY_CARD_PADDING))
-            .gap_2()
+            .gap_1()
             .rounded_lg()
             .bg(theme.popover)
             .border_1()
             .border_color(theme.border)
             .shadow_lg()
+            // Play looks like every other entry; it's first, under the cursor.
             .child(
-                Button::new("confirm-play")
-                    .primary()
-                    .w_full()
-                    .h(px(PLAY_BUTTON_HEIGHT))
-                    .icon(IconName::Play)
-                    .label(label)
+                card_button("confirm-play", IconName::Play, label, cx)
                     .on_click(cx.listener(|app, _, window, cx| app.play_pending(window, cx))),
             )
             .children(self.secondary_action(&pending.game, cx))
             .children(pending.game.install_dir.clone().map(|dir| {
-                card_button("show-folder", IconName::FolderOpen, "Show in folder").on_click(cx.listener(
+                card_button("show-folder", IconName::FolderOpen, "Show in folder", cx).on_click(cx.listener(
                     move |app, _, _, cx| {
                         cx.open_with_system(&dir);
                         app.cancel_play(cx);
@@ -378,8 +376,11 @@ impl MulchApp {
                     anchored()
                         .position_mode(AnchoredPositionMode::Window)
                         .position(pending.at)
-                        // Put the middle of the Play button under the cursor.
-                        .offset(point(px(-card_width / 2.), px(-(PLAY_CARD_PADDING + PLAY_BUTTON_HEIGHT / 2.))))
+                        // Put the start of the Play entry under the cursor.
+                        .offset(point(
+                            px(-(PLAY_CARD_PADDING + CARD_BUTTON_HEIGHT / 2.)),
+                            px(-(PLAY_CARD_PADDING + CARD_BUTTON_HEIGHT / 2.)),
+                        ))
                         .snap_to_window_with_margin(px(8.))
                         .child(card),
                 ),
@@ -390,7 +391,7 @@ impl MulchApp {
 
     /// "Show in <launcher>", or for games the user added (which have no
     /// launcher) the only way to take them out again.
-    fn secondary_action(&self, game: &Game, cx: &mut Context<Self>) -> Option<Button> {
+    fn secondary_action(&self, game: &Game, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
         if let Some(show) = game.show_in_launcher.clone() {
             let launcher = match game.platform {
                 Platform::Xbox => "Microsoft Store",
@@ -398,17 +399,19 @@ impl MulchApp {
                 other => other.label(),
             };
             let name = game.name.clone();
-            return Some(card_button("show-launcher", IconName::ExternalLink, format!("Show in {launcher}")).on_click(
-                cx.listener(move |app, _, window, cx| {
-                    run_action(&show, &name, window, cx);
-                    app.cancel_play(cx);
-                }),
-            ));
+            return Some(
+                card_button("show-launcher", IconName::ExternalLink, format!("Show in {launcher}"), cx).on_click(
+                    cx.listener(move |app, _, window, cx| {
+                        run_action(&show, &name, window, cx);
+                        app.cancel_play(cx);
+                    }),
+                ),
+            );
         }
         if let (Platform::Manual, Action::Exe { path, .. }) = (game.platform, &game.launch) {
             let exe = path.clone();
             return Some(
-                card_button("remove-manual", IconName::Close, "Remove")
+                card_button("remove-manual", IconName::Close, "Remove", cx)
                     .on_click(cx.listener(move |app, _, _, cx| app.remove_manual(exe.clone(), cx))),
             );
         }
@@ -535,15 +538,24 @@ impl MulchApp {
             ThemeChoice::Light => (Icon::new(IconName::Sun), "Theme: light"),
             ThemeChoice::Dark => (Icon::new(IconName::Moon), "Theme: dark"),
         };
-        let theme = quick_tooltip(
-            "theme-tip",
-            theme_tip,
-            Button::new("theme")
-                .ghost()
-                .icon(theme_icon)
-                .on_click(cx.listener(|app, _, window, cx| app.cycle_theme(window, cx))),
-        )
-        .into_any_element();
+        // Its tooltip reads the current text each frame, so it changes on click
+        // while still showing.
+        self.theme_tip.set(theme_tip);
+        let tip = self.theme_tip.clone();
+        let theme = div()
+            .id("theme-tip")
+            .child(
+                Button::new("theme")
+                    .ghost()
+                    .icon(theme_icon)
+                    .on_click(cx.listener(|app, _, window, cx| app.cycle_theme(window, cx))),
+            )
+            .tooltip(move |window, cx| {
+                let tip = tip.clone();
+                Tooltip::element(move |_, _| tip.get()).build(window, cx)
+            })
+            .tooltip_show_delay(TOOLTIP_DELAY)
+            .into_any_element();
         let actions = vec![
             theme,
             quick_tooltip(
@@ -575,6 +587,8 @@ impl MulchApp {
             .h(px(TOOLBAR_HEIGHT))
             .px(px(TOOLBAR_PADDING))
             .gap(px(TOOLBAR_GAP))
+            .border_b_1()
+            .border_color(cx.theme().border)
             .child(h_flex().flex_1().child(self.measured(
                 0,
                 h_flex().gap(px(TOOLBAR_GAP)).children(social_icons).children(divider).children(launcher_icons),
@@ -853,13 +867,13 @@ const GROUP_NAMES: [&str; 3] = ["Played in the last week", "Played in the last m
 
 /// How much of a tile's width an icon (rather than cover art) takes up.
 const ICON_SHARE: f32 = 0.6;
-/// The play card's width: at least this, more for a long "Play <name>", at most the max.
-const PLAY_CARD_WIDTH: f32 = 180.;
-const PLAY_CARD_MAX_WIDTH: f32 = 340.;
-/// Room around the Play label: the play icon and gap, the button's and the card's padding.
-const PLAY_LABEL_ROOM: f32 = 72.;
+/// The play card's width: at least this, more if its entries need it.
+const PLAY_CARD_MIN_WIDTH: f32 = 180.;
+/// Room around an entry's label: its icon and gap, the button's and the card's padding.
+const CARD_LABEL_ROOM: f32 = 64.;
 const PLAY_CARD_PADDING: f32 = 8.;
-const PLAY_BUTTON_HEIGHT: f32 = 36.;
+/// Each entry in the play card.
+const CARD_BUTTON_HEIGHT: f32 = 28.;
 /// Space above and below the grid.
 const GRID_PADDING: f32 = 20.;
 /// Least space either side of the grid (the window snaps to widths where it's exactly this).
@@ -972,11 +986,22 @@ fn text_width(text: &str, window: &Window, cx: &App) -> f32 {
     f32::from(window.text_system().shape_line(SharedString::from(text.to_string()), font_size, &[run], None).width)
 }
 
-/// A full-width, left-aligned button for the play card.
-fn card_button(id: &'static str, icon: IconName, label: impl Into<SharedString>) -> Button {
-    Button::new(id).ghost().small().w_full().justify_start().icon(icon).label(label)
+/// A full-width, left-aligned entry in the play card, highlighted on hover.
+fn card_button(id: &'static str, icon: IconName, label: impl Into<SharedString>, cx: &App) -> Stateful<Div> {
+    // A plain row rather than a kit button (which always centres its label).
+    let hover = cx.theme().list_hover;
+    h_flex()
+        .id(id)
+        .w_full()
+        .h(px(CARD_BUTTON_HEIGHT))
+        .px_2()
+        .gap_2()
+        .rounded_md()
+        .text_sm()
+        .hover(move |style| style.bg(hover))
+        .child(Icon::new(icon).small())
+        .child(label.into())
 }
-
 fn run_action(action: &Action, name: &str, window: &mut Window, cx: &mut App) {
     if let Err(err) = launch::run(action) {
         window.push_notification(Notification::error(format!("Couldn't start {name}: {err}")), cx);
