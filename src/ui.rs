@@ -34,12 +34,15 @@ pub fn run() {
     gpui_kit::application().with_assets(crate::assets::Assets).run(move |cx| {
         gpui_kit::init(cx);
         Theme::change(theme_mode(Settings::load().theme, cx.window_appearance()), None, cx);
+        make_glassy(cx);
 
         let options = WindowOptions {
             // Our own slim title bar (see `title_bar`), with the toolbar under
             // it. The title is still set for the taskbar and Alt+Tab.
             titlebar: Some(TitlebarOptions { title: Some(APP_NAME.into()), ..TitleBar::title_bar_options() }),
             app_owns_titlebar_drag: true,
+            // Frosted glass: the desktop behind shows through, blurred.
+            window_background: WindowBackgroundAppearance::Blurred,
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, default_window_size(cx), cx))),
             // The width also grows to fit the toolbar (see `update_min_width`).
             window_min_size: Some(size(px(MIN_WINDOW_WIDTH), px(360.))),
@@ -57,9 +60,12 @@ pub fn run_installer() {
     gpui_kit::application().with_assets(crate::assets::Assets).run(move |cx| {
         gpui_kit::init(cx);
         Theme::change(theme_mode(ThemeChoice::System, cx.window_appearance()), None, cx);
+        make_glassy(cx);
         let options = WindowOptions {
             titlebar: Some(TitlebarOptions { title: Some(APP_NAME.into()), ..TitleBar::title_bar_options() }),
             app_owns_titlebar_drag: true,
+            // Frosted glass: the desktop behind shows through, blurred.
+            window_background: WindowBackgroundAppearance::Blurred,
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                 None,
                 size(px(INSTALLER_WIDTH), px(INSTALLER_HEIGHT)),
@@ -198,7 +204,7 @@ impl Render for Installer {
         v_flex()
             .size_full()
             .bg(theme.background)
-            .child(TitleBar::new().bg(theme.background).border_color(theme.background))
+            .child(TitleBar::new().bg(gpui_kit::transparent_black()).border_color(gpui_kit::transparent_black()))
             .child(
                 v_flex()
                     .flex_1()
@@ -625,9 +631,10 @@ impl MulchApp {
 
     fn title_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
+        // Clear, like the rest of the glass, and no line under it.
         TitleBar::new()
-            .bg(theme.background)
-            .border_color(theme.border)
+            .bg(gpui_kit::transparent_black())
+            .border_color(gpui_kit::transparent_black())
             .child(
                 h_flex()
                     .flex_1()
@@ -706,8 +713,6 @@ impl MulchApp {
             .h(px(TOOLBAR_HEIGHT))
             .px(px(TOOLBAR_PADDING))
             .gap(px(TOOLBAR_GAP))
-            .border_b_1()
-            .border_color(cx.theme().border)
             .child(h_flex().flex_1().child(self.measured(
                 0,
                 h_flex().gap(px(TOOLBAR_GAP)).children(launcher_icons).children(divider).children(social_icons),
@@ -737,6 +742,7 @@ impl MulchApp {
     /// Applies the chosen theme (for "system", whichever Windows is using).
     fn apply_theme(&self, window: &mut Window, cx: &mut Context<Self>) {
         Theme::change(theme_mode(self.settings.theme, window.appearance()), Some(window), cx);
+        make_glassy(cx);
     }
 
     /// The theme button: system, then light, then dark, then system again.
@@ -907,7 +913,9 @@ impl MulchApp {
         let play_game = game.clone();
 
         // The full name shows on hover only when it's cut short.
-        let show_full_name = self.hovered_tile == Some(ix) && name_is_cut_short(&game.name, width, window, cx);
+        let hovered = self.hovered_tile == Some(ix);
+        let show_full_name = hovered && name_is_cut_short(&game.name, width, window, cx);
+        let glow = if theme.mode.is_dark() { gpui_kit::white().opacity(0.25) } else { gpui_kit::black().opacity(0.35) };
         div()
             .id(("game", ix))
             .relative()
@@ -923,7 +931,30 @@ impl MulchApp {
             .on_click(
                 cx.listener(move |app, _, window, cx| app.request_play(play_game.clone(), window.mouse_position(), cx)),
             )
-            .child(div().w(px(width)).h(px(height)).overflow_hidden().bg(theme.muted).child(artwork(game, width)))
+            .child(
+                // The poster lifts a little, with a soft glow, while hovered.
+                div()
+                    .relative()
+                    .w(px(width))
+                    .h(px(height))
+                    .overflow_hidden()
+                    .bg(theme.muted)
+                    .child(artwork(game, width))
+                    .with_animation(
+                        if hovered { ("lift", ix) } else { ("settle", ix) },
+                        Animation::new(LIFT_DURATION).with_easing(ease_out_quint()),
+                        move |poster, t| {
+                            let lift = if hovered { t } else { 1. - t };
+                            poster.top(px(-LIFT * lift)).shadow(vec![BoxShadow {
+                                color: glow.opacity(glow.a * lift),
+                                offset: point(px(0.), px(8. * lift)),
+                                blur_radius: px(24. * lift),
+                                spread_radius: px(0.),
+                                inset: false,
+                            }])
+                        },
+                    ),
+            )
             .child(
                 // One line, cut short with "…"; hovering one that's cut short
                 // shows the whole name in a pill whose text sits exactly over
@@ -960,11 +991,33 @@ impl MulchApp {
             )
             .child(div().text_xs().text_color(theme.muted_foreground).child(game.platform.label()))
             .h(px(height + LABEL_HEIGHT))
+            // Tiles fade and rise into place when they first appear, one
+            // shortly after another.
+            .with_animation(("enter", ix), entrance(ix), |tile, t| tile.opacity(t).top(px(ENTER_RISE * (1. - t))))
             .into_any_element()
     }
 }
 
 const LAUNCHER_SIZE: f32 = 36.;
+/// How far a hovered poster lifts, and how quickly.
+const LIFT: f32 = 4.;
+const LIFT_DURATION: std::time::Duration = std::time::Duration::from_millis(180);
+/// Tiles' entrance: how far they rise, for how long, and the stagger between them.
+const ENTER_RISE: f32 = 12.;
+const ENTER_MS: f32 = 380.;
+const ENTER_STAGGER_MS: f32 = 25.;
+/// Tiles after this many all enter together, so a big library isn't slow to appear.
+const ENTER_STAGGERED: usize = 24;
+
+/// The entrance animation for the tile at `ix`: it waits its turn, then
+/// eases in.
+fn entrance(ix: usize) -> Animation {
+    let delay = ix.min(ENTER_STAGGERED) as f32 * ENTER_STAGGER_MS;
+    let total = delay + ENTER_MS;
+    Animation::new(std::time::Duration::from_millis(total as u64))
+        .with_easing(move |t| ease_out_quint()(((t * total - delay) / ENTER_MS).clamp(0., 1.)))
+}
+
 /// A game name's line under its tile (text_sm).
 const NAME_LINE_HEIGHT: f32 = 20.;
 /// Padding around a hovered game's full name (horizontal, vertical; the border adds 1).
@@ -996,6 +1049,67 @@ const MIN_WINDOW_WIDTH: f32 = 480.;
 /// Minimise, maximise and close, on the right of the title bar, less its left padding.
 const WINDOW_CONTROLS_WIDTH: f32 = 3. * 34. - 12.;
 
+/// Makes the theme see-through, for the window's frosted-glass backdrop.
+///
+/// The glass sits over whatever is behind the window, so its tint is worked
+/// out against the worst case (a white desktop behind dark glass, black
+/// behind light): just strong enough that text keeps at least 7:1 contrast
+/// and secondary text at least 4.5:1 (WCAG AAA and AA), whatever is behind.
+/// Menus are worked out the same way.
+fn make_glassy(cx: &mut App) {
+    let theme = Theme::global_mut(cx);
+    let worst = if theme.mode.is_dark() { gpui_kit::white() } else { gpui_kit::black() };
+    let foreground = theme.colors.foreground;
+
+    let tint = theme.colors.background.opacity(1.);
+    let alpha = glass_alpha(foreground, tint, worst, TEXT_CONTRAST);
+    let background = tint.opacity(alpha);
+    theme.colors.background = background;
+    theme.tokens.background = background.into();
+    theme.colors.title_bar = gpui_kit::transparent_black();
+    theme.colors.muted_foreground = secondary_text(foreground, tint, over(tint, alpha, worst));
+
+    let popover = theme.colors.popover.opacity(1.);
+    theme.colors.popover = popover.opacity(glass_alpha(foreground, popover, worst, TEXT_CONTRAST));
+}
+
+/// Body text contrast (WCAG AAA), and secondary text (AA).
+const TEXT_CONTRAST: f32 = 7.;
+const SECONDARY_CONTRAST: f32 = 4.5;
+
+/// The least opacity for `tint` over `backdrop` that keeps `text` at `ratio`.
+fn glass_alpha(text: Hsla, tint: Hsla, backdrop: Hsla, ratio: f32) -> f32 {
+    (0..=100).map(|step| step as f32 / 100.).find(|&a| contrast(text, over(tint, a, backdrop)) >= ratio).unwrap_or(1.)
+}
+
+/// Secondary text: as far from `text` toward `tint` as still keeps AA contrast
+/// against `background`.
+fn secondary_text(text: Hsla, tint: Hsla, background: Hsla) -> Hsla {
+    (0..=60)
+        .rev()
+        .map(|step| step as f32 / 100.)
+        .map(|m| over(tint, m, text))
+        .find(|&c| contrast(c, background) >= SECONDARY_CONTRAST)
+        .unwrap_or(text)
+}
+
+/// `top` at `alpha` over `bottom`, as an opaque colour.
+fn over(top: Hsla, alpha: f32, bottom: Hsla) -> Hsla {
+    let (t, b) = (Rgba::from(top), Rgba::from(bottom));
+    let mix = |x: f32, y: f32| x * alpha + y * (1. - alpha);
+    Hsla::from(Rgba { r: mix(t.r, b.r), g: mix(t.g, b.g), b: mix(t.b, b.b), a: 1. })
+}
+
+/// WCAG contrast ratio between two opaque colours.
+fn contrast(a: Hsla, b: Hsla) -> f32 {
+    let luminance = |c: Hsla| {
+        let c = Rgba::from(c);
+        let linear = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+        0.2126 * linear(c.r) + 0.7152 * linear(c.g) + 0.0722 * linear(c.b)
+    };
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
 /// The light or dark theme for a choice, given whether Windows is in dark mode.
 fn theme_mode(choice: ThemeChoice, windows: WindowAppearance) -> ThemeMode {
     match choice {
