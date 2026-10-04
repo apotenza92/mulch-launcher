@@ -20,30 +20,34 @@
       background: radial-gradient(60rem 40rem at 50% -10%, color-mix(in srgb, var(--glow) 35%, transparent), transparent), var(--bg);
       color: var(--fg); font: 16px/1.5 "Segoe UI Variable", "Segoe UI", system-ui, sans-serif; text-align: center;
     }
-    main { max-width: 34rem; }
-    img { width: 128px; height: 128px; filter: drop-shadow(0 18px 30px rgba(200, 100, 40, .35)); }
+    main { max-width: 60rem; }
+    img.logo { width: 128px; height: 128px; filter: drop-shadow(0 18px 30px rgba(200, 100, 40, .35)); }
     h1 { margin: 20px 0 8px; font-size: clamp(2rem, 6vw, 2.75rem); letter-spacing: -.02em; }
-    p { margin: 0 0 32px; color: var(--muted); font-size: 1.15rem; }
-    a.download {
-      display: inline-block; padding: 16px 36px; border-radius: 999px; color: #fff; text-decoration: none;
-      font-weight: 600; font-size: 1.1rem; background: linear-gradient(120deg, var(--from), var(--to));
-      box-shadow: 0 10px 28px -8px color-mix(in srgb, var(--to) 70%, transparent);
-      transition: transform .35s cubic-bezier(.2, 1.4, .4, 1), box-shadow .35s;
-    }
-    a.download:hover { transform: translateY(-2px) scale(1.03); box-shadow: 0 16px 36px -8px color-mix(in srgb, var(--to) 80%, transparent); }
-    a.download:focus-visible { outline: 3px solid var(--from); outline-offset: 4px; }
+    p { margin: 0 0 28px; color: var(--muted); font-size: 1.15rem; }
+    a.store { display: inline-block; border-radius: 8px; transition: transform .35s cubic-bezier(.2, 1.4, .4, 1); }
+    a.store:hover { transform: translateY(-2px) scale(1.03); }
+    a.store:focus-visible { outline: 3px solid var(--from); outline-offset: 4px; }
+    a.store img { width: 200px; height: auto; display: block; }
+    small { display: block; margin: 14px 0 40px; color: var(--muted); font-size: .95rem; }
+    img.shot { width: 100%; height: auto; border-radius: 12px; box-shadow: 0 24px 60px -20px rgba(60, 30, 10, .45); }
     a.source { display: inline-block; margin-top: 28px; color: var(--muted); opacity: .7; transition: opacity .2s, color .2s; }
     a.source:hover, a.source:focus-visible { opacity: 1; color: var(--fg); }
     a.source svg { width: 22px; height: 22px; display: block; }
-    small { display: block; margin-top: 16px; color: var(--muted); }
   </style>
 </head>
 <body>
   <main>
-    <img src="logo.png" alt="">
+    <img class="logo" src="logo.png" alt="">
     <h1>MulchLauncher</h1>
     <p>One launcher for all your games.</p>
-    <a class="download" href="https://github.com/apotenza92/mulch-launcher/releases/latest/download/MulchLauncher.exe">Download</a>
+    <a class="store" href="https://apps.microsoft.com/detail/9NQK96N5M6PH?mode=direct">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="https://get.microsoft.com/images/en-us%20light.svg">
+        <img src="https://get.microsoft.com/images/en-us%20dark.svg" alt="Get it from Microsoft">
+      </picture>
+    </a>
+    <small>Windows only, for now.</small>
+    <img class="shot" src="screenshots/library.png" alt="The library">
     <div><a class="source" href="https://github.com/apotenza92/mulch-launcher" aria-label="Source code on GitHub">
       <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
     </a></div>  </main>
