@@ -206,13 +206,14 @@ impl Render for Installer {
             .size_full()
             .bg(theme.background)
             .child(TitleBar::new().bg(gpui_kit::transparent_black()).border_color(gpui_kit::transparent_black()))
-            .child(
+            .child(card_entrance(
+                "installer-body",
                 v_flex()
                     .flex_1()
                     .px_6()
                     .pb_6()
                     .gap_4()
-                    .child(div().text_xl().font_semibold().child(format!("Install {APP_NAME}")))
+                    .child(div().text_2xl().font_bold().child(format!("Install {APP_NAME}")))
                     .child(check_row("desktop", self.desktop, "Add to desktop", None, cx).on_click(cx.listener(
                         |this, _, _, cx| {
                             this.desktop = !this.desktop;
@@ -224,13 +225,12 @@ impl Render for Installer {
                     .child(div().flex_1())
                     .child(
                         h_flex().justify_end().child(
-                            Button::new("install")
-                                .primary()
-                                .label("Install")
+                            pill_button("install", "Install", PillKind::Primary, false, cx)
+                                .px(px(28.))
                                 .on_click(cx.listener(|this, _, _, cx| this.install(cx))),
                         ),
                     ),
-            )
+            ))
     }
 }
 struct MulchApp {
@@ -1034,45 +1034,39 @@ impl MulchApp {
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(with_alpha(theme.background, 0.85))
-                .child(
-                    v_flex()
-                        .w(px(520.))
-                        .p_6()
+                .bg(with_alpha(gpui_kit::black(), if theme.mode.is_dark() { 0.55 } else { 0.25 }))
+                .with_animation("add-backdrop-fade", Animation::new(CARD_ENTRANCE), |b, t| b.opacity(t.min(1.) * 1.))
+                .child(card_entrance(
+                    "add-card",
+                    glass_card(cx)
+                        .w(px(540.))
+                        .p(px(28.))
+                        .flex()
+                        .flex_col()
                         .gap_4()
-                        .rounded_lg()
-                        .bg(theme.popover)
-                        .border_1()
-                        .border_color(theme.border)
-                        .shadow_lg()
-                        .child(div().text_xl().font_semibold().child("Add game manually"))
+                        .child(div().text_2xl().font_bold().child("Add a game"))
                         .child(body)
                         .child(
                             h_flex()
+                                .pt_2()
                                 .gap_2()
                                 .child(
-                                    Button::new("add-browse")
-                                        .outline()
-                                        .icon(IconName::FolderOpen)
-                                        .label("Browse…")
+                                    pill_button("add-browse", "Browse for a game…", PillKind::Secondary, false, cx)
                                         .on_click(cx.listener(|app, _, _, cx| app.browse_for_games(cx))),
                                 )
                                 .child(div().flex_1())
                                 .child(
-                                    Button::new("add-cancel")
-                                        .ghost()
-                                        .label("Cancel")
+                                    pill_button("add-cancel", "Cancel", PillKind::Quiet, false, cx)
                                         .on_click(cx.listener(|app, _, _, cx| app.close_add_panel(cx))),
                                 )
                                 .child(
-                                    Button::new("add-selected")
-                                        .primary()
-                                        .label("Add selected")
-                                        .disabled(!can_add)
-                                        .on_click(cx.listener(|app, _, _, cx| app.add_selected(cx))),
+                                    pill_button("add-selected", "Add selected", PillKind::Primary, !can_add, cx)
+                                        .when(can_add, |b| {
+                                            b.on_click(cx.listener(|app, _, _, cx| app.add_selected(cx)))
+                                        }),
                                 ),
                         ),
-                ),
+                )),
         )
         .with_priority(4)
         .into_any_element()
@@ -1679,6 +1673,103 @@ fn with_tooltip(element: Stateful<Div>, text: impl Into<SharedString>) -> Statef
 
 /// A full-width option: a checkbox beside a title (and optional detail lines
 /// under it). The whole row is clickable and highlights on hover.
+/// A frosted glass card for panels: generously rounded, with light catching
+/// its top edge and a deep, soft shadow so it floats above the window.
+fn glass_card(cx: &App) -> Div {
+    let theme = cx.theme();
+    let dark = theme.mode.is_dark();
+    div()
+        .relative()
+        .rounded(px(CARD_RADIUS))
+        .bg(theme.popover)
+        .border_1()
+        .border_color(if dark { gpui_kit::white().opacity(0.12) } else { gpui_kit::white().opacity(0.7) })
+        .shadow(vec![
+            BoxShadow {
+                color: gpui_kit::black().opacity(if dark { 0.55 } else { 0.22 }),
+                offset: point(px(0.), px(24.)),
+                blur_radius: px(48.),
+                spread_radius: px(-8.),
+                inset: false,
+            },
+            BoxShadow {
+                color: gpui_kit::white().opacity(if dark { 0.08 } else { 0.6 }),
+                offset: point(px(0.), px(1.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+                inset: true,
+            },
+        ])
+}
+
+/// A card's entrance: it springs up into place as it fades in.
+fn card_entrance<E: Styled + IntoElement + 'static>(id: &'static str, card: E) -> AnimationElement<E> {
+    card.with_animation(id, Animation::new(CARD_ENTRANCE).with_easing(spring), |card, t| {
+        card.opacity((t * 2.).min(1.)).top(px(CARD_RISE * (1. - t)))
+    })
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum PillKind {
+    /// The main action: a colourful gradient.
+    Primary,
+    /// A secondary action: frosted glass.
+    Secondary,
+    /// A quiet action: text until hovered.
+    Quiet,
+}
+
+/// A rounded pill button, in the app's style.
+fn pill_button(
+    id: &'static str,
+    label: impl Into<SharedString>,
+    kind: PillKind,
+    disabled: bool,
+    cx: &App,
+) -> Stateful<Div> {
+    let theme = cx.theme();
+    let dark = theme.mode.is_dark();
+    let glass = if dark { gpui_kit::white().opacity(0.1) } else { gpui_kit::black().opacity(0.05) };
+    let glass_hover = if dark { gpui_kit::white().opacity(0.18) } else { gpui_kit::black().opacity(0.1) };
+    let pill = div()
+        .id(id)
+        .h(px(PILL_HEIGHT))
+        .px(px(18.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .rounded_full()
+        .text_sm()
+        .font_semibold()
+        .child(label.into());
+    let pill = match kind {
+        PillKind::Primary => pill
+            .text_color(gpui_kit::white())
+            .bg(linear_gradient(120., linear_color_stop(ACCENT_FROM, 0.), linear_color_stop(ACCENT_TO, 1.)))
+            .shadow(vec![BoxShadow {
+                color: with_alpha(ACCENT_TO, 0.45),
+                offset: point(px(0.), px(6.)),
+                blur_radius: px(16.),
+                spread_radius: px(-4.),
+                inset: false,
+            }])
+            .when(!disabled, |pill| pill.hover(|s| s.opacity(0.92))),
+        PillKind::Secondary => pill.bg(glass).border_1().border_color(theme.border).hover(move |s| s.bg(glass_hover)),
+        PillKind::Quiet => pill.text_color(theme.muted_foreground).hover(move |s| s.bg(glass)),
+    };
+    pill.when(disabled, |pill| pill.opacity(0.4))
+}
+
+/// The accent gradient, for primary actions.
+const ACCENT_FROM: Hsla = Hsla { h: 222. / 360., s: 0.95, l: 0.62, a: 1. };
+const ACCENT_TO: Hsla = Hsla { h: 268. / 360., s: 0.85, l: 0.64, a: 1. };
+/// Panels: corner rounding, entrance, and pill buttons' height.
+const CARD_RADIUS: f32 = 20.;
+const CARD_RISE: f32 = 18.;
+const CARD_ENTRANCE: std::time::Duration = std::time::Duration::from_millis(520);
+const PILL_HEIGHT: f32 = 36.;
+
 fn check_row(
     id: impl Into<ElementId>,
     checked: bool,
@@ -1695,8 +1786,8 @@ fn check_row(
         .px_2()
         // The hover background reaches past the content, which lines up with the text around it.
         .mx(px(-8.))
-        .py_1p5()
-        .rounded_md()
+        .py_2()
+        .rounded(px(12.))
         .hover(move |style| style.bg(hover))
         .child(Checkbox::new("check").checked(checked).large())
         .child(
