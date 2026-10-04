@@ -239,9 +239,6 @@ struct MulchApp {
     social: Vec<Launcher>,
     /// "Add game manually", while it's showing.
     add_panel: Option<AddPanel>,
-    /// Natural widths of the toolbar's left and right groups, measured as
-    /// they're laid out, which set the window's minimum width.
-    toolbar_widths: Rc<[Cell<f32>; 2]>,
     /// The native window, once known.
     hwnd: Option<isize>,
     /// The game tile under the mouse, which shows its full name.
@@ -294,7 +291,6 @@ impl MulchApp {
             launchers: Vec::new(),
             social: Vec::new(),
             add_panel: None,
-            toolbar_widths: Rc::default(),
             hwnd: None,
             hovered_tile: None,
             tilt: (0., 0.),
@@ -720,16 +716,10 @@ impl MulchApp {
             .into_any_element()
     }
 
-    /// Launchers (most games first) | chat apps on the left; theme, scan again and add game on the right.
-    fn toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
-        let launcher_icons: Vec<AnyElement> = self
-            .launchers
-            .iter()
-            .enumerate()
-            .map(|(ix, launcher)| self.launcher_icon(("launcher", ix), launcher, cx))
-            .collect();
-        let social_icons: Vec<AnyElement> =
-            self.social.iter().enumerate().map(|(ix, app)| self.launcher_icon(("social", ix), app, cx)).collect();
+    /// Scan again, add a game and the theme, in the title bar's left corner.
+    /// Drawn on a layer above the title bar, which claims its own clicks
+    /// (the title bar itself is the window's drag area).
+    fn title_buttons(&self, cx: &mut Context<Self>) -> AnyElement {
         let (theme_icon, theme_tip) = match self.settings.theme {
             ThemeChoice::System => (Icon::empty().path("mulch/monitor.svg"), "Theme: same as Windows"),
             ThemeChoice::Light => (Icon::new(IconName::Sun), "Theme: light"),
@@ -744,6 +734,7 @@ impl MulchApp {
             .child(
                 Button::new("theme")
                     .ghost()
+                    .small()
                     .icon(theme_icon)
                     .on_click(cx.listener(|app, _, window, cx| app.cycle_theme(window, cx))),
             )
@@ -751,81 +742,42 @@ impl MulchApp {
                 let tip = tip.clone();
                 Tooltip::element(move |_, _| tip.get()).build(window, cx)
             })
-            .tooltip_show_delay(TOOLTIP_DELAY)
-            .into_any_element();
-        let actions = vec![
-            theme,
-            quick_tooltip(
-                "rescan-tip",
-                "Scan again",
-                Button::new("rescan")
-                    .ghost()
-                    .icon(IconName::RefreshCw)
-                    .loading(self.scanning)
-                    .on_click(cx.listener(|app, _, _, cx| app.rescan(cx))),
-            )
-            .into_any_element(),
-            quick_tooltip(
-                "add-game-tip",
-                "Add game manually",
-                Button::new("add-game")
-                    .ghost()
-                    .icon(IconName::Plus)
-                    .on_click(cx.listener(|app, _, _, cx| app.open_add_panel(cx))),
-            )
-            .into_any_element(),
-        ];
-
-        let theme = cx.theme();
-        // A floating glass pill over the grid, which scrolls underneath it.
-        // Groups are told apart by a wider gap rather than dividers.
-        let pill = h_flex()
-            .absolute()
-            .top(px(TITLE_BAR_HEIGHT + PILL_GAP))
-            .left(px(GRID_MARGIN_X))
-            .right(px(GRID_MARGIN_X))
-            .h(px(TOOLBAR_HEIGHT))
-            .px(px(TOOLBAR_PADDING))
-            .gap(px(TOOLBAR_GAP))
-            .rounded_full()
-            // Solid enough that its icons stay clear over posters scrolling underneath.
-            .bg(with_alpha(theme.popover, PILL_OPACITY))
-            .border_1()
-            .border_color(theme.border.opacity(0.6))
-            .shadow_lg()
-            .child(
-                h_flex().flex_1().child(
-                    self.measured(
-                        0,
-                        h_flex()
-                            .gap(px(TOOLBAR_GAP))
-                            .children(launcher_icons)
-                            .child(h_flex().ml(px(TOOLBAR_GAP)).gap(px(TOOLBAR_GAP)).children(social_icons)),
-                    ),
-                ),
-            )
-            .child(self.measured(1, h_flex().gap_2().children(actions)));
-        deferred(pill).into_any_element()
-    }
-    /// A toolbar group at its natural width, recording that width (in slot
-    /// `ix`) each time it's laid out.
-    fn measured(&self, ix: usize, group: Div) -> Div {
-        let widths = self.toolbar_widths.clone();
-        group.flex_shrink_0().relative().child(
-            canvas(
-                move |bounds, window, _| {
-                    let width = f32::from(bounds.size.width);
-                    if widths[ix].replace(width) != width {
-                        window.refresh();
-                    }
-                },
-                |_, _, _, _| {},
-            )
-            .absolute()
-            .size_full(),
+            .tooltip_show_delay(TOOLTIP_DELAY);
+        let rescan = quick_tooltip(
+            "rescan-tip",
+            "Scan again",
+            Button::new("rescan")
+                .ghost()
+                .small()
+                .icon(IconName::RefreshCw)
+                .loading(self.scanning)
+                .on_click(cx.listener(|app, _, _, cx| app.rescan(cx))),
+        );
+        let add = quick_tooltip(
+            "add-game-tip",
+            "Add game manually",
+            Button::new("add-game")
+                .ghost()
+                .small()
+                .icon(IconName::Plus)
+                .on_click(cx.listener(|app, _, _, cx| app.open_add_panel(cx))),
+        );
+        deferred(
+            h_flex()
+                .id("title-buttons")
+                .occlude()
+                .absolute()
+                .top_0()
+                .left(px(TITLE_BUTTONS_INSET))
+                .h(px(TITLE_BAR_HEIGHT))
+                .items_center()
+                .gap_1()
+                .child(rescan)
+                .child(add)
+                .child(theme),
         )
+        .into_any_element()
     }
-
     /// Applies the chosen theme (for "system", whichever Windows is using).
     fn apply_theme(&self, window: &mut Window, cx: &mut Context<Self>) {
         Theme::change(theme_mode(self.settings.theme, window.appearance()), Some(window), cx);
@@ -867,15 +819,6 @@ impl MulchApp {
         }
     }
 
-    /// The narrowest the window can be with the whole toolbar still showing.
-    fn toolbar_min_width(&self) -> f32 {
-        GRID_MARGIN_X * 2.
-            + TOOLBAR_PADDING * 2.
-            + TOOLBAR_GAP
-            + self.toolbar_widths[0].get()
-            + self.toolbar_widths[1].get()
-    }
-
     /// How many games were played in the last week, the last month (but not
     /// the last week) and before that or never. Games are sorted most recent first, so each
     /// group follows the one before.
@@ -895,7 +838,7 @@ impl MulchApp {
         groups
     }
 
-    /// Keeps the window at least as wide as the toolbar needs.
+    /// Window sizing: a minimum width, and widths that snap to whole columns.
     fn update_min_width(&mut self, window: &Window) {
         if self.hwnd.is_none() {
             if let Ok(RawWindowHandle::Win32(handle)) = HasWindowHandle::window_handle(window).map(|h| h.as_raw()) {
@@ -906,7 +849,7 @@ impl MulchApp {
         }
         if let Some(hwnd) = self.hwnd {
             crate::window_size::set_snap(GRID_MARGIN_X * 2., TILE_WIDTH + GRID_GAP, GRID_GAP);
-            crate::window_size::set_min(hwnd, self.toolbar_min_width().max(MIN_WINDOW_WIDTH));
+            crate::window_size::set_min(hwnd, MIN_WINDOW_WIDTH);
         }
     }
 
@@ -1004,26 +947,6 @@ impl MulchApp {
         .with_priority(4)
         .into_any_element()
     }
-    fn launcher_icon(&self, id: (&'static str, usize), launcher: &Launcher, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
-        let name = launcher.name;
-        let open = launcher.open.clone();
-
-        div()
-            .id(id)
-            .size(px(LAUNCHER_SIZE))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded_md()
-            .hover(|style| style.bg(theme.list_hover))
-            .child(launcher_glyph(name, launcher.icon.clone(), theme.muted_foreground))
-            .tooltip(move |window, cx| Tooltip::new(format!("Open {name}")).build(window, cx))
-            .tooltip_show_delay(TOOLTIP_DELAY)
-            .on_click(move |_, window, cx| run_action(&open, name, window, cx))
-            .into_any_element()
-    }
-
     fn tile(&self, ix: usize, game: &Game, layout: &GridLayout, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let (width, height) = (layout.tile_width, layout.tile_width * COVER_ASPECT);
 
@@ -1177,7 +1100,6 @@ impl MulchApp {
     }
 }
 
-const LAUNCHER_SIZE: f32 = 36.;
 /// A value easing from where it was toward a target (0 to 1).
 #[derive(Clone, Copy)]
 struct Tween {
@@ -1318,16 +1240,9 @@ const GRID_PADDING: f32 = 20.;
 const GRID_MARGIN_X: f32 = 24.;
 /// The title bar's height.
 const TITLE_BAR_HEIGHT: f32 = 34.;
-/// The toolbar under the title bar.
-const TOOLBAR_HEIGHT: f32 = 52.;
-/// Space around the floating toolbar (chosen so it takes the same room as
-/// the grid's top padding did).
-const PILL_GAP: f32 = GRID_PADDING / 2.;
-/// The floating toolbar's least opacity.
-const PILL_OPACITY: f32 = 0.85;
-const TOOLBAR_PADDING: f32 = 16.;
-const TOOLBAR_GAP: f32 = 16.;
-/// The window is never narrower than this, even with a short toolbar.
+/// How far the title bar's buttons sit from the window's left edge.
+const TITLE_BUTTONS_INSET: f32 = 8.;
+/// The window is never narrower than this.
 const MIN_WINDOW_WIDTH: f32 = 480.;
 /// Minimise, maximise and close, on the right of the title bar, less its left padding.
 const WINDOW_CONTROLS_WIDTH: f32 = 3. * 34. - 12.;
@@ -1420,12 +1335,8 @@ fn default_window_size(cx: &App) -> gpui_kit::Size<Pixels> {
     const GROUPS: f32 = 3.;
     let width = GRID_MARGIN_X * 2. + grid_width(COLUMNS, tile);
     let row = tile * COVER_ASPECT + LABEL_HEIGHT;
-    let height = TITLE_BAR_HEIGHT
-        + TOOLBAR_HEIGHT
-        + GRID_PADDING
-        + GROUPS * HEADING_HEIGHT
-        + (GROUPS - 0.5) * row
-        + (GROUPS - 1.) * GRID_GAP;
+    let height =
+        TITLE_BAR_HEIGHT + GRID_PADDING + GROUPS * HEADING_HEIGHT + (GROUPS - 0.5) * row + (GROUPS - 1.) * GRID_GAP;
     let screen = cx.primary_display().map(|d| d.bounds().size);
     let (max_width, max_height) =
         screen.map(|s| (f32::from(s.width), f32::from(s.height) * 0.95)).unwrap_or((width, height));
@@ -1449,19 +1360,6 @@ fn artwork(game: &Game, width: f32) -> AnyElement {
             .child(img(path.clone()).size(px(width * ICON_SHARE)).object_fit(ObjectFit::Contain))
             .into_any_element(),
         None => div().size_full().into_any_element(),
-    }
-}
-
-/// The icon (or initials) for a launcher button.
-fn launcher_glyph(name: &str, icon: Option<PathBuf>, muted: Hsla) -> AnyElement {
-    match icon {
-        Some(path) => img(path).size(px(LAUNCHER_SIZE - 10.)).object_fit(ObjectFit::Contain).into_any_element(),
-        None => div()
-            .text_xs()
-            .font_semibold()
-            .text_color(muted)
-            .child(name.chars().filter(|c| c.is_uppercase()).take(2).collect::<String>())
-            .into_any_element(),
     }
 }
 
@@ -1616,7 +1514,7 @@ impl Render for MulchApp {
         let viewport = window.viewport_size();
         let layout = grid_layout(&self.recency_groups(), f32::from(viewport.width) - GRID_MARGIN_X * 2.);
         let title_bar = self.title_bar(cx);
-        let toolbar = self.toolbar(cx);
+        let title_buttons = self.title_buttons(cx);
         // Rows built explicitly (rather than by wrapping) so each group starts a new row.
         let mut tiles: Vec<AnyElement> =
             self.games.iter().enumerate().map(|(ix, game)| self.tile(ix, game, &layout, window, cx)).collect();
@@ -1649,13 +1547,12 @@ impl Render for MulchApp {
 
         let add_panel = self.add_panel.as_ref().map(|panel| self.add_panel(panel, cx));
 
-        v_flex().relative().size_full().children(add_panel).child(title_bar).child(toolbar).child(
+        v_flex().relative().size_full().children(add_panel).child(title_bar).child(title_buttons).child(
             div()
                 .id("library")
                 .flex_1()
                 .overflow_y_scroll()
-                // Room at the top for the floating toolbar.
-                .pt(px(PILL_GAP * 2. + TOOLBAR_HEIGHT))
+                .pt(px(GRID_PADDING))
                 .pb(px(GRID_PADDING))
                 .px(px(GRID_MARGIN_X))
                 // Played in the last week, then the last month, then the rest.
