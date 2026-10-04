@@ -137,7 +137,7 @@ fn scan_packages() -> windows::core::Result<Vec<Game>> {
         );
         // The game's processes can run from either folder.
         game.process_dirs = vec![visible_dir, install_dir.clone()];
-        game.show_in_launcher = Some(Action::Uri(format!("ms-windows-store://pdp/?PFN={family_name}")));
+        game.show_in_launcher = Some(Action::XboxAppPage(family_name.clone()));
         // Square logos, not posters: shown as icons until a real poster is
         // fetched (see the posters crate).
         game.art = logo(&install_dir, &config).or_else(|| manifest_logo(&install_dir)).map(Art::Icon);

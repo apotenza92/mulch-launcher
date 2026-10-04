@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+<defs>
+  <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#ffb26b"/><stop offset="0.45" stop-color="#ffcf8a"/><stop offset="1" stop-color="#ffe7b3"/>
+  </linearGradient>
+  <radialGradient id="sun" cx="0.7" cy="0.68" r="0.55">
+    <stop offset="0" stop-color="#fff6d6" stop-opacity="1"/><stop offset="0.18" stop-color="#ffe29a" stop-opacity="0.95"/>
+    <stop offset="0.5" stop-color="#ffb46a" stop-opacity="0.35"/><stop offset="1" stop-color="#ff9a5a" stop-opacity="0"/>
+  </radialGradient>
+  <linearGradient id="soil" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7a4a2a"/><stop offset="1" stop-color="#3e2414"/></linearGradient>
+  <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffb066" stop-opacity="0.55"/><stop offset="0.25" stop-color="#ffb066" stop-opacity="0"/></linearGradient>
+  <linearGradient id="seed" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffe2a8"/><stop offset="1" stop-color="#c98e4b"/></linearGradient>
+  <linearGradient id="leaf" x1="1" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#1f7a43"/><stop offset="1" stop-color="#7fcf5f"/></linearGradient>
+  <linearGradient id="leaf2" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#1c7340"/><stop offset="1" stop-color="#8fd866"/></linearGradient>
+  <linearGradient id="shine" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0.28"/><stop offset="0.45" stop-color="#ffffff" stop-opacity="0"/></linearGradient>
+  <clipPath id="tile"><rect x="8" y="8" width="240" height="240" rx="56"/></clipPath>
+  <clipPath id="mound"><path d="M8 196 C 52 150, 204 150, 248 196 L 248 248 L 8 248 Z"/></clipPath>
+  <mask id="leafA" maskUnits="userSpaceOnUse" x="0" y="0" width="256" height="256"><g transform="translate(150 102) rotate(30) scale(0.74)"><path d="M0 0 C -8 8, -46 10, -52 -22 C -58 -60, -36 -98, -6 -126 L 0 -136 L 6 -126 C 36 -98, 58 -60, 52 -22 C 46 10, 8 8, 0 0 Z" fill="white"/><g fill="none" stroke="black" stroke-width="6.5" stroke-linecap="round"><path d="M-60 -14 C -42 -16, -26 -14, -13 -10"/><path d="M-60 -48 C -42 -46, -26 -42, -12 -36"/><path d="M-46 -86 C -34 -80, -22 -74, -10 -66"/><path d="M-24 -116 C -18 -108, -12 -100, -6 -92"/>
+<path d="M60 -30 C 42 -30, 26 -27, 12 -22"/><path d="M58 -64 C 40 -60, 26 -55, 12 -50"/><path d="M38 -100 C 28 -92, 18 -86, 8 -80"/></g><g fill="black"><ellipse cx="-30" cy="-30" rx="3.5" ry="6" transform="rotate(-20 -30 -30)"/><ellipse cx="27" cy="-46" rx="3.5" ry="6" transform="rotate(20 27 -46)"/><ellipse cx="-24" cy="-66" rx="3" ry="5.5" transform="rotate(-25 -24 -66)"/><ellipse cx="22" cy="-82" rx="3" ry="5" transform="rotate(25 22 -82)"/><ellipse cx="-14" cy="-100" rx="2.5" ry="4.5"/><ellipse cx="34" cy="-12" rx="3" ry="5" transform="rotate(15 34 -12)"/></g></g></mask>
+  <mask id="leafB" maskUnits="userSpaceOnUse" x="0" y="0" width="256" height="256"><g transform="translate(106 120) rotate(-38) scale(0.54)"><path d="M0 0 C -8 8, -46 10, -52 -22 C -58 -60, -36 -98, -6 -126 L 0 -136 L 6 -126 C 36 -98, 58 -60, 52 -22 C 46 10, 8 8, 0 0 Z" fill="white"/><g fill="none" stroke="black" stroke-width="6.5" stroke-linecap="round"><path d="M-60 -14 C -42 -16, -26 -14, -13 -10"/><path d="M-60 -48 C -42 -46, -26 -42, -12 -36"/><path d="M-46 -86 C -34 -80, -22 -74, -10 -66"/><path d="M-24 -116 C -18 -108, -12 -100, -6 -92"/>
+<path d="M60 -30 C 42 -30, 26 -27, 12 -22"/><path d="M58 -64 C 40 -60, 26 -55, 12 -50"/><path d="M38 -100 C 28 -92, 18 -86, 8 -80"/></g><g fill="black"><ellipse cx="-30" cy="-30" rx="3.5" ry="6" transform="rotate(-20 -30 -30)"/><ellipse cx="27" cy="-46" rx="3.5" ry="6" transform="rotate(20 27 -46)"/><ellipse cx="-24" cy="-66" rx="3" ry="5.5" transform="rotate(-25 -24 -66)"/><ellipse cx="22" cy="-82" rx="3" ry="5" transform="rotate(25 22 -82)"/><ellipse cx="-14" cy="-100" rx="2.5" ry="4.5"/><ellipse cx="34" cy="-12" rx="3" ry="5" transform="rotate(15 34 -12)"/></g></g></mask>
+</defs>
+<g clip-path="url(#tile)">
+  <rect x="8" y="8" width="240" height="240" fill="url(#sky)"/>
+  <rect x="8" y="8" width="240" height="240" fill="url(#sun)"/>
+  <path d="M8 196 C 52 150, 204 150, 248 196 L 248 248 L 8 248 Z" fill="url(#soil)"/>
+  <g clip-path="url(#mound)" fill="#a87650" opacity="0.85">
+    <rect x="44" y="190" width="20" height="7" rx="3.5" transform="rotate(-18 54 193)"/>
+    <rect x="86" y="208" width="16" height="6" rx="3" transform="rotate(14 94 211)"/>
+    <rect x="150" y="200" width="22" height="7" rx="3.5" transform="rotate(-10 161 203)"/>
+    <rect x="190" y="214" width="16" height="6" rx="3" transform="rotate(22 198 217)"/>
+    <rect x="118" y="222" width="14" height="5" rx="2.5" transform="rotate(-25 125 224)"/>
+    <rect x="62" y="228" width="12" height="5" rx="2.5" transform="rotate(30 68 230)"/>
+    <rect x="204" y="190" width="12" height="5" rx="2.5" transform="rotate(-30 210 192)"/>
+  </g>
+  <path d="M8 196 C 52 150, 204 150, 248 196 L 248 248 L 8 248 Z" fill="url(#rim)"/>
+  <ellipse cx="128" cy="172" rx="17" ry="12" fill="url(#seed)" transform="rotate(-20 128 172)"/>
+  <path d="M128 164 C 128 140, 142 122, 150 102" fill="none" stroke="#4f9a3e" stroke-width="6" stroke-linecap="round"/>
+  <path d="M126 160 C 120 142, 112 130, 106 120" fill="none" stroke="#4f9a3e" stroke-width="5" stroke-linecap="round"/>
+  <path d="M128 162 C 130 146, 128 136, 124 128" fill="none" stroke="#4f9a3e" stroke-width="4" stroke-linecap="round"/>
+  <path d="M124 128 C 112 120, 116 102, 128 104 C 138 106, 136 120, 126 118" fill="#5fbf5a" stroke="#3a8a3a" stroke-width="1.5"/>
+  <g mask="url(#leafB)"><g transform="translate(106 120) rotate(-38) scale(0.54)"><path d="M0 0 C -8 8, -46 10, -52 -22 C -58 -60, -36 -98, -6 -126 L 0 -136 L 6 -126 C 36 -98, 58 -60, 52 -22 C 46 10, 8 8, 0 0 Z" fill="url(#leaf)"/><path d="M0 -2 C 2 -50, 1 -90, 0 -128" fill="none" stroke="#bfe98f" stroke-width="3" stroke-linecap="round" opacity="0.6"/></g></g>
+  <g mask="url(#leafA)"><g transform="translate(150 102) rotate(30) scale(0.74)"><path d="M0 0 C -8 8, -46 10, -52 -22 C -58 -60, -36 -98, -6 -126 L 0 -136 L 6 -126 C 36 -98, 58 -60, 52 -22 C 46 10, 8 8, 0 0 Z" fill="url(#leaf2)"/><path d="M0 -2 C 2 -50, 1 -90, 0 -128" fill="none" stroke="#bfe98f" stroke-width="3" stroke-linecap="round" opacity="0.6"/></g></g>
+  <rect x="8" y="8" width="240" height="240" fill="url(#shine)"/>
+</g>
+</svg>

@@ -202,6 +202,16 @@ fn image_extension(bytes: &[u8]) -> Option<&'static str> {
 }
 
 /// The "Poster" image (2:3) from Microsoft's public store catalogue.
+/// A Microsoft Store game's product id (e.g. "9N201KQXS5BM") from its package
+/// family name, via Microsoft's public store catalogue.
+pub fn store_product_id(family_name: &str) -> Option<String> {
+    let catalog = get_json(&format!(
+        "https://displaycatalog.mp.microsoft.com/v7.0/products/lookup?alternateId=PackageFamilyName\
+         &value={family_name}&market=US&languages=en-us&fieldsTemplate=Details"
+    ))?;
+    catalog["Products"][0]["ProductId"].as_str().map(str::to_string)
+}
+
 fn xbox_poster_url(game: &Game) -> Option<String> {
     let family_name = game.id.strip_prefix("xbox:")?;
     let catalog = get_json(&format!(

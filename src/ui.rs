@@ -631,7 +631,7 @@ impl MulchApp {
         let mut action: Option<AnyElement> = None;
         if let Some(show) = game.show_in_launcher.clone() {
             let launcher = match game.platform {
-                Platform::Xbox => "Microsoft Store",
+                Platform::Xbox => "the Xbox app",
                 Platform::Gog => "GOG Galaxy",
                 other => other.label(),
             };

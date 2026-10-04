@@ -34,14 +34,15 @@ fn main() {
         print_discover();
         return;
     }
-    // Run by Windows' "Installed apps" > Uninstall.
-    if has("--uninstall") {
+    // Run by Windows' "Installed apps" > Uninstall (GitHub installs only; the
+    // Store uninstalls its own).
+    if has("--uninstall") && !mulch_core::paths::is_packaged() {
         let _ = install::uninstall();
         return;
     }
     // Run from anywhere else (e.g. Downloads): the small install window.
     // Nothing is saved next to this copy.
-    if !install::is_dev_build() && !install::is_installed_copy() {
+    if !install::is_dev_build() && !install::is_installed_copy() && !mulch_core::paths::is_packaged() {
         ui::run_installer();
         return;
     }

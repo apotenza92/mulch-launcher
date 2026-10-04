@@ -58,6 +58,9 @@ pub enum Action {
     /// A complete command line, run exactly as written, with its quoting
     /// kept intact.
     CommandLine(String),
+    /// An Xbox / Microsoft Store game's page in the Xbox app, by its package
+    /// family name (looked up in Microsoft's catalogue when opened).
+    XboxAppPage(String),
 }
 
 #[derive(Clone, Debug, Serialize)]
