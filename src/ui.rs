@@ -24,10 +24,8 @@ use mulch_launcher::scan::{self, Action, Art, Game, Launcher, Platform, ScanResu
 use mulch_manual as manual;
 use mulch_posters as posters;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::rc::Rc;
 
 const APP_NAME: &str = "MulchLauncher";
 const REPO_URL: &str = "https://github.com/apotenza92/mulch-launcher";
@@ -261,14 +259,6 @@ struct MulchApp {
     hwnd: Option<isize>,
     /// The game tile under the mouse, which shows its full name.
     hovered_tile: Option<usize>,
-    /// Where the light on the hovered poster comes from: the mouse's place on
-    /// it, from -1 to 1 across and down (0, 0 the middle), eased each frame
-    /// toward `light_target`.
-    light: (f32, f32),
-    light_target: (f32, f32),
-    light_stepped: std::time::Instant,
-    /// The hovered poster's bounds, measured as it's laid out.
-    hovered_bounds: Rc<Cell<Bounds<Pixels>>>,
     scanning: bool,
     /// The added game whose Remove button was clicked once (the next click removes).
     confirm_remove: Option<String>,
@@ -337,10 +327,6 @@ impl MulchApp {
             add_panel: None,
             hwnd: None,
             hovered_tile: None,
-            light: (0., 0.),
-            light_target: (0., 0.),
-            light_stepped: std::time::Instant::now(),
-            hovered_bounds: Rc::default(),
             scanning: false,
             confirm_remove: None,
             lifts: HashMap::new(),
@@ -1130,20 +1116,6 @@ impl MulchApp {
         .with_priority(4)
         .into_any_element()
     }
-    /// Eases the light toward the mouse's place; true while still moving.
-    fn step_light(&mut self) -> bool {
-        let now = std::time::Instant::now();
-        let dt = now.duration_since(self.light_stepped).as_secs_f32().min(0.1);
-        self.light_stepped = now;
-        let k = 1. - (-dt / LIGHT_EASE).exp();
-        let ((x, y), (tx, ty)) = (self.light, self.light_target);
-        self.light = (x + (tx - x) * k, y + (ty - y) * k);
-        let moving = (tx - self.light.0).abs() > 0.002 || (ty - self.light.1).abs() > 0.002;
-        if !moving {
-            self.light = self.light_target;
-        }
-        moving
-    }
     fn tile(&self, ix: usize, game: &Game, layout: &GridLayout, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let (width, height) = (layout.tile_width, layout.tile_width * COVER_ASPECT);
 
@@ -1171,13 +1143,12 @@ impl MulchApp {
         // The full name shows on hover only when it's cut short.
         let hovered = self.hovered_tile == Some(ix);
         let dark = cx.theme().mode.is_dark();
-        let (lx, ly) = if hovered { self.light } else { (0., 0.) };
         // How far a hovered, cut-short name slides to show its end.
         let overflow = hovered
             .then(|| text_width(&game.name, window, cx) - width)
             .filter(|o| *o > 0.)
             .map(|o| o + MARQUEE_END_ROOM);
-        // The rim's light is a pale tint of the poster's own colour where it has one.
+        // The hover ring is a pale tint of the poster's own colour where it has one.
         let accent = match &game.art {
             Some(Art::Cover(path) | Art::Icon(path)) => self.accents.get(path).copied(),
             None => None,
@@ -1205,23 +1176,9 @@ impl MulchApp {
                         app.confirm_remove = None;
                     }
                     Tween::spring_to(&mut app.lifts, &id, if *hovered { 1. } else { 0. }, LIFT_DURATION);
-                    if *hovered {
-                        app.light = (0., 0.);
-                        app.light_target = (0., 0.);
-                    }
                     cx.notify();
                 })
             })
-            .on_mouse_move(cx.listener(move |app, event: &MouseMoveEvent, _, cx| {
-                let bounds = app.hovered_bounds.get();
-                if app.hovered_tile != Some(ix) || bounds.size.width <= px(0.) {
-                    return;
-                }
-                let across = (event.position.x - bounds.origin.x) / bounds.size.width;
-                let down = (event.position.y - bounds.origin.y) / bounds.size.height;
-                app.light_target = ((across * 2. - 1.).clamp(-1., 1.), (down * 2. - 1.).clamp(-1., 1.));
-                cx.notify();
-            }))
             // A double-click anywhere on the tile plays, as well as the Play button.
             .on_click(cx.listener(move |app, event: &ClickEvent, window, cx| {
                 if std::mem::take(&mut app.action_clicked) {
@@ -1232,35 +1189,29 @@ impl MulchApp {
                 }
             }))
             .child(
-                // Every poster casts a soft drop shadow. Hovered, it stays put but is
-                // lit from the mouse: a sheen and a brighter edge on the mouse's side,
-                // and a deeper shadow. Then it's drawn after the other tiles, so the
-                // shadow falls over them.
-                div()
-                    .relative()
-                    .w(px(width))
-                    .h(px(height))
-                    .when(hovered, |slot| {
-                        // Measure the poster, so the mouse's place on it is known.
-                        let bounds = self.hovered_bounds.clone();
-                        slot.child(canvas(move |b, _, _| bounds.set(b), |_, _, _, _| {}).absolute().size_full())
-                    })
-                    .child({
-                        let frame = div()
-                            .relative()
-                            .size_full()
-                            .overflow_hidden()
-                            .rounded(px(TILE_RADIUS))
-                            .bg(theme.muted)
-                            .child(poster)
-                            .when(lift > 0., |frame| frame.child(sheen(lift, lx, ly)).child(rim(lift, lx, ly, shine)))
-                            .shadow(cast_shadow(lift, lx, ly, dark));
-                        if lift > 0. {
-                            deferred(frame).with_priority(0).into_any_element()
-                        } else {
-                            frame.into_any_element()
-                        }
-                    }),
+                // Every poster casts a soft drop shadow. Hovered, the shadow deepens
+                // and a ring in a pale tint of its own colour fades in around it.
+                // Then it's drawn after the other tiles, so the shadow falls over them.
+                div().relative().w(px(width)).h(px(height)).child({
+                    let frame = div()
+                        .relative()
+                        .size_full()
+                        .child(
+                            div()
+                                .size_full()
+                                .overflow_hidden()
+                                .rounded(px(TILE_RADIUS))
+                                .bg(theme.muted)
+                                .child(poster)
+                                .shadow(cast_shadow(lift, dark)),
+                        )
+                        .when(lift > 0., |frame| frame.child(ring(lift, shine)));
+                    if lift > 0. {
+                        deferred(frame).with_priority(0).into_any_element()
+                    } else {
+                        frame.into_any_element()
+                    }
+                }),
             )
             // The buttons sit above the poster, not clipped to its edges.
             .children(actions.map(|actions| {
@@ -1394,63 +1345,39 @@ fn blend_colors(from: &ThemeColor, to: &ThemeColor, t: f32) -> ThemeColor {
 /// Corner rounding for posters, panels and cards.
 const TILE_RADIUS: f32 = 8.;
 
-/// A light sheen over a hovered poster, brightest on the side the light
-/// (the mouse, `lx`, `ly` from -1 to 1) is on, stronger toward the edges.
-fn sheen(lift: f32, lx: f32, ly: f32) -> Div {
-    // CSS-style angle of the direction away from the light.
-    let angle = (-lx).atan2(ly).to_degrees();
-    let strength = (0.08 + 0.14 * (lx * lx + ly * ly).sqrt().min(1.)) * lift.clamp(0., 1.);
-    div().absolute().top_0().left_0().size_full().rounded(px(TILE_RADIUS)).bg(linear_gradient(
-        angle,
-        linear_color_stop(gpui_kit::white().opacity(strength), 0.),
-        linear_color_stop(gpui_kit::white().opacity(0.), 0.6),
-    ))
-}
-
-/// A soft light around a hovered poster's edge, brighter on the light's side.
-fn rim(lift: f32, lx: f32, ly: f32, shine: Hsla) -> Div {
-    let light = lift.clamp(0., 1.);
+/// A ring around a hovered poster, just outside its edge, fading in with
+/// `lift` (0 to 1).
+fn ring(lift: f32, color: Hsla) -> Div {
     div()
         .absolute()
-        .top_0()
-        .left_0()
-        .size_full()
-        .rounded(px(TILE_RADIUS))
-        .border_1()
-        .border_color(with_alpha(shine, 0.3 * light))
-        .shadow(vec![BoxShadow {
-            color: with_alpha(shine, RIM_LIGHT * light),
-            offset: point(px(-RIM_LEAN * lx), px(-RIM_LEAN * ly)),
-            blur_radius: px(RIM_BLUR),
-            spread_radius: px(0.),
-            inset: true,
-        }])
+        .top(px(-RING_GAP))
+        .left(px(-RING_GAP))
+        .right(px(-RING_GAP))
+        .bottom(px(-RING_GAP))
+        .rounded(px(TILE_RADIUS + RING_GAP))
+        .border(px(RING_WIDTH))
+        .border_color(with_alpha(color, RING_ALPHA * lift.clamp(0., 1.)))
 }
-/// The rim's brightness, softness, and how far it leans toward the light.
-const RIM_LIGHT: f32 = 0.38;
-const RIM_BLUR: f32 = 16.;
-const RIM_LEAN: f32 = 4.;
+/// The hover ring's distance outside the poster, thickness and strength.
+const RING_GAP: f32 = 4.;
+const RING_WIDTH: f32 = 2.;
+const RING_ALPHA: f32 = 0.9;
 
 /// Every poster's drop shadow, so it stands off the background: subtle at
-/// rest, deeper and softer as it lights up on hover (`lift` 0 to 1), when
-/// it also leans a little away from the light (the mouse).
-fn cast_shadow(lift: f32, lx: f32, ly: f32, dark: bool) -> Vec<BoxShadow> {
+/// rest, deeper and softer as it's hovered (`lift` 0 to 1).
+fn cast_shadow(lift: f32, dark: bool) -> Vec<BoxShadow> {
     let lit = lift.clamp(0., 1.);
     let between = |rest: f32, hovered: f32| rest + (hovered - rest) * lit;
     let (rest, hovered) = if dark { (0.45, 0.7) } else { (0.16, 0.32) };
     vec![BoxShadow {
         color: gpui_kit::black().opacity(between(rest, hovered)),
-        offset: point(px(-SHADOW_REACH * lx * lit), px(between(4., 14.) - SHADOW_REACH * ly * lit)),
+        offset: point(px(0.), px(between(4., 14.))),
         blur_radius: px(between(12., 32.)),
         spread_radius: px(between(-2., -4.)),
         inset: false,
     }]
 }
-/// How far a lit poster's shadow leans away from the light.
-const SHADOW_REACH: f32 = 5.;
-/// How quickly the light follows the mouse, in seconds (time constant).
-const LIGHT_EASE: f32 = 0.1;
-/// How quickly a hovered poster lights up (and its buttons appear).
+/// How quickly a hovered poster's ring, shadow and buttons come in.
 const LIFT_DURATION: std::time::Duration = std::time::Duration::from_millis(520);
 /// Tiles' entrance: how far they rise, for how long, and the stagger between them.
 const ENTER_RISE: f32 = 12.;
@@ -1916,11 +1843,7 @@ impl Render for MulchApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.update_min_width(window);
         self.step_theme_fade(window, cx);
-        if Tween::tidy(&mut self.lifts)
-            | Tween::tidy(&mut self.button_heights)
-            | Tween::tidy_up(&mut self.leaving)
-            | self.step_light()
-        {
+        if Tween::tidy(&mut self.lifts) | Tween::tidy(&mut self.button_heights) | Tween::tidy_up(&mut self.leaving) {
             window.request_animation_frame();
         }
         let viewport = window.viewport_size();
