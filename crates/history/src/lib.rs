@@ -1,6 +1,7 @@
 //! MulchLauncher's own record of when each game was last played, for sorting
-//! by recency on every platform (most launchers keep play history only in
-//! the user's online account).
+//! by recency. The only source, so every platform is treated the same (most
+//! launchers keep play history only in the user's online account, so none
+//! of them are read).
 //!
 //! A game counts as played when it's started from MulchLauncher, or whenever
 //! a running process's executable lives in one of the game's folders, which
@@ -51,9 +52,8 @@ impl History {
         *entry = (*entry).max(when);
     }
 
-    /// The later of Mulch's record and what the game's launcher reports.
     pub fn last_played(&self, game: &Game) -> Option<u64> {
-        self.last_played.get(&game.id).copied().max(game.last_played)
+        self.last_played.get(&game.id).copied()
     }
 
     /// Sorts most recently played first; never-played games follow A–Z.
@@ -120,17 +120,16 @@ mod tests {
     use super::*;
     use mulch_core::{Action, Platform};
 
-    fn game(id: &str, name: &str, last_played: Option<u64>) -> Game {
-        let mut game = Game::new(id.into(), name.into(), Platform::Manual, None, Action::Uri(String::new()));
-        game.last_played = last_played;
-        game
+    fn game(id: &str, name: &str) -> Game {
+        Game::new(id.into(), name.into(), Platform::Manual, None, Action::Uri(String::new()))
     }
 
     #[test]
     fn sorts_by_recency_then_name() {
         let mut history = History::default();
         history.record("b", 300);
-        let mut games = vec![game("a", "Alpha", None), game("b", "Bravo", Some(100)), game("c", "Charlie", Some(200)), game("d", "delta", None)];
+        history.record("c", 200);
+        let mut games = vec![game("a", "Alpha"), game("b", "Bravo"), game("c", "Charlie"), game("d", "delta")];
         history.sort(&mut games);
         let order: Vec<&str> = games.iter().map(|g| g.name.as_str()).collect();
         assert_eq!(order, ["Bravo", "Charlie", "Alpha", "delta"]);
@@ -140,7 +139,7 @@ mod tests {
     fn finds_this_test_process() {
         // The test binary itself is running from target/; treat that as a game folder.
         let exe = std::env::current_exe().unwrap();
-        let mut g = game("self", "Self", None);
+        let mut g = game("self", "Self");
         g.process_dirs = vec![exe.parent().unwrap().to_path_buf()];
         assert_eq!(running_games(&[g]), vec!["self".to_string()]);
     }

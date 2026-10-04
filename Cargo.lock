@@ -4023,6 +4023,7 @@ name = "mulch-core"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "windows 0.61.3",
  "winreg",
 ]
 
@@ -4031,6 +4032,7 @@ name = "mulch-discover"
 version = "0.1.0"
 dependencies = [
  "goblin",
+ "mulch-core",
  "windows 0.61.3",
 ]
 

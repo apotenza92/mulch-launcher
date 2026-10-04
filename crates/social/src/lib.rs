@@ -1,5 +1,5 @@
-//! Chat apps people use to get a game night together (Discord, WhatsApp,
-//! ...), shown as buttons in the middle of the toolbar when installed.
+//! Chat apps people use to get a game night together (Discord, ...), shown
+//! as buttons at the start of the toolbar when installed.
 //!
 //! Each is found the way it registers itself: a link handler, a Microsoft
 //! Store package, or a Windows "Installed apps" entry. Never a default path.
@@ -19,12 +19,6 @@ struct ChatApp {
 
 const CHAT_APPS: &[ChatApp] = &[
     ChatApp { name: "Discord", schemes: &["discord"], store_packages: &[], uninstall_name: Some("Discord") },
-    ChatApp {
-        name: "WhatsApp",
-        schemes: &[],
-        store_packages: &["5319275A.WhatsAppDesktop_cv1g1gvanyjgm"],
-        uninstall_name: None,
-    },
     ChatApp {
         name: "Messenger",
         schemes: &[],

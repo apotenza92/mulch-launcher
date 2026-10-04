@@ -1,11 +1,10 @@
-//! The main window: a slim title bar, a toolbar (launchers on the left, chat
-//! apps in the middle, buttons on the right) and every detected game as a
-//! tile, sized so as many fit as possible (scrolling once tiles reach their
-//! minimum size).
+//! The main window: a slim title bar, a toolbar (chat apps and launchers on
+//! the left, buttons on the right) and every detected game as a tile, grouped
+//! by when it was last played and sized so they all fit if they can.
 
 use mulch_launcher::install;
 use mulch_launcher::launch;
-use mulch_launcher::layout::{COVER_ASPECT, GRID_GAP, GridLayout, fit_tiles};
+use mulch_launcher::layout::{COVER_ASPECT, GRID_GAP, GridLayout, HEADING_HEIGHT, fit_tiles};
 use mulch_art as art;
 use mulch_history::{self as history, History};
 use mulch_launcher::scan::{self, Action, Art, Game, Launcher, Platform, ScanResult};
@@ -55,14 +54,14 @@ pub fn run(pin_requested: bool) {
 struct MulchApp {
     games: Vec<Game>,
     launchers: Vec<Launcher>,
-    /// Installed chat apps (Discord, WhatsApp, ...).
+    /// Installed chat apps (Discord, ...).
     social: Vec<Launcher>,
     settings: Settings,
     /// "Add game manually", while it's showing.
     add_panel: Option<AddPanel>,
-    /// Natural widths of the toolbar's left, middle and right groups, measured
-    /// as they're laid out, which set the window's minimum width.
-    toolbar_widths: Rc<[Cell<f32>; 3]>,
+    /// Natural widths of the toolbar's left and right groups, measured as
+    /// they're laid out, which set the window's minimum width.
+    toolbar_widths: Rc<[Cell<f32>; 2]>,
     /// The native window, once known.
     hwnd: Option<isize>,
     scanning: bool,
@@ -205,7 +204,18 @@ impl MulchApp {
     }
 
     fn apply(&mut self, result: ScanResult, cx: &mut Context<Self>) {
+        // Keep the art already showing (icons and downloaded posters arrive
+        // after the scan), so a rescan doesn't blank every tile for a moment.
+        let mut shown: HashMap<String, Art> =
+            self.games.drain(..).filter_map(|g| Some((g.id, g.art?))).collect();
         self.games = result.games;
+        for game in &mut self.games {
+            if !matches!(game.art, Some(Art::Cover(_))) {
+                if let Some(art) = shown.remove(&game.id) {
+                    game.art = Some(art);
+                }
+            }
+        }
         self.history.sort(&mut self.games);
         self.launchers = result.launchers;
         self.launchers.sort_by_key(|l| l.name.to_lowercase());
@@ -616,7 +626,7 @@ impl MulchApp {
             .into_any_element()
     }
 
-    /// Launchers on the left, chat apps in the middle, buttons on the right.
+    /// Chat apps, a divider and launchers on the left; buttons on the right.
     fn toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
         let launcher_icons: Vec<_> = self
             .launchers
@@ -626,16 +636,20 @@ impl MulchApp {
             .collect();
         let social_icons: Vec<_> =
             self.social.iter().enumerate().map(|(ix, app)| self.launcher_icon(("social", ix), app, cx)).collect();
+        let divider = (!social_icons.is_empty() && !launcher_icons.is_empty())
+            .then(|| div().w(px(1.)).h(px(LAUNCHER_SIZE - 12.)).bg(cx.theme().border));
 
         h_flex()
             .flex_shrink_0()
             .h(px(TOOLBAR_HEIGHT))
             .px(px(TOOLBAR_PADDING))
             .gap(px(TOOLBAR_GAP))
-            .child(h_flex().flex_1().child(self.measured(0, h_flex().gap_3().children(launcher_icons))))
-            .child(self.measured(1, h_flex().gap_3().children(social_icons)))
-            .child(h_flex().flex_1().justify_end().child(self.measured(
-                2,
+            .child(h_flex().flex_1().child(self.measured(
+                0,
+                h_flex().gap_3().children(social_icons).children(divider).children(launcher_icons),
+            )))
+            .child(h_flex().justify_end().child(self.measured(
+                1,
                 h_flex()
                     .gap_2()
                     .child(
@@ -678,11 +692,29 @@ impl MulchApp {
         )
     }
 
-    /// The narrowest the window can be with the whole toolbar still showing,
-    /// chat apps centred.
+    /// The narrowest the window can be with the whole toolbar still showing.
     fn toolbar_min_width(&self) -> f32 {
-        let [left, middle, right] = [0, 1, 2].map(|ix| self.toolbar_widths[ix].get());
-        TOOLBAR_PADDING * 2. + TOOLBAR_GAP * 2. + middle + left.max(right) * 2.
+        let [left, right] = [0, 1].map(|ix| self.toolbar_widths[ix].get());
+        TOOLBAR_PADDING * 2. + TOOLBAR_GAP + left + right
+    }
+
+    /// How many games were played in the last week, the last month (but not
+    /// the last week) and before that or never. Games are sorted most recent first, so each
+    /// group follows the one before.
+    fn recency_groups(&self) -> [usize; 3] {
+        const DAY: u64 = 24 * 60 * 60;
+        let now = history::now();
+        let mut groups = [0; 3];
+        for game in &self.games {
+            let age = self.history.last_played(game).map(|when| now.saturating_sub(when));
+            let group = match age {
+                Some(age) if age <= 7 * DAY => 0,
+                Some(age) if age <= 30 * DAY => 1,
+                _ => 2,
+            };
+            groups[group] += 1;
+        }
+        groups
     }
 
     /// Keeps the window at least as wide as the toolbar needs.
@@ -839,6 +871,8 @@ impl MulchApp {
 }
 
 const LAUNCHER_SIZE: f32 = 36.;
+/// Labels for the recency groups (see `recency_groups`).
+const GROUP_NAMES: [&str; 3] = ["Played in the last week", "Played in the last month", "Everything else"];
 
 /// How much of a tile's width an icon (rather than cover art) takes up.
 const ICON_SHARE: f32 = 0.6;
@@ -908,7 +942,7 @@ impl Render for MulchApp {
         self.update_min_width(window);
         let viewport = window.viewport_size();
         let layout = fit_tiles(
-            self.games.len(),
+            &self.recency_groups(),
             f32::from(viewport.width) - GRID_PADDING * 2. - SCROLLBAR_ROOM,
             f32::from(viewport.height) - HEADER_HEIGHT - GRID_PADDING * 2. - FIT_SLACK,
         );
@@ -918,13 +952,31 @@ impl Render for MulchApp {
         // wrapping: with fractional widths, wrapping could push a row's last
         // tile down a line on some frames and back on others while resizing.
         let layout = GridLayout { tile_width: layout.tile_width.floor(), ..layout };
-        let row_sizes = layout.rows.clone();
         let mut tiles: Vec<AnyElement> =
             self.games.iter().enumerate().map(|(ix, game)| self.tile(ix, game, &layout, cx)).collect();
-        let mut rows = Vec::new();
-        for size in row_sizes {
-            let rest = tiles.split_off(size.min(tiles.len()));
-            rows.push(h_flex().items_start().gap(px(GRID_GAP)).children(std::mem::replace(&mut tiles, rest)));
+        let muted = cx.theme().muted_foreground;
+        let mut sections = Vec::new();
+        for section in &layout.sections {
+            let mut rows = Vec::new();
+            for &size in &section.rows {
+                let rest = tiles.split_off(size.min(tiles.len()));
+                rows.push(h_flex().items_start().gap(px(GRID_GAP)).children(std::mem::replace(&mut tiles, rest)));
+            }
+            sections.push(
+                v_flex()
+                    .gap(px(GRID_GAP))
+                    .when(layout.labelled, |this| {
+                        this.child(
+                            div()
+                                .h(px(HEADING_HEIGHT - GRID_GAP))
+                                .text_sm()
+                                .font_semibold()
+                                .text_color(muted)
+                                .child(GROUP_NAMES[section.group]),
+                        )
+                    })
+                    .children(rows),
+            );
         }
         let empty = !self.scanning && self.games.is_empty();
 
@@ -950,10 +1002,10 @@ impl Render for MulchApp {
                     .flex_1()
                     .overflow_y_scroll()
                     .p(px(GRID_PADDING))
-                    // A pyramid from the top: rows grow downwards, each centred.
+                    // Played in the last week, then the last month, then the rest.
                     .flex()
                     .items_start()
-                    .justify_center()
+                    .justify_start()
                     .when(empty, |this| {
                         this.child(
                             v_flex()
@@ -970,7 +1022,7 @@ impl Render for MulchApp {
                                 ),
                         )
                     })
-                    .child(v_flex().w_full().items_center().gap(px(GRID_GAP)).children(rows)),
+                    .child(v_flex().w_full().gap(px(GRID_GAP)).children(sections)),
             )
     }
 }

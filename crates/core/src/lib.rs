@@ -8,6 +8,7 @@
 //! manifests, Windows' package database) so games on any drive or custom
 //! folder are found. Default paths are only ever a last-resort fallback.
 
+pub mod exe_info;
 pub mod registry;
 
 use registry::UninstallEntry;
@@ -75,8 +76,6 @@ pub struct Game {
     pub art: Option<Art>,
     /// An executable or .ico to take an icon from when there's no art.
     pub icon_source: Option<PathBuf>,
-    /// When the launcher itself last saw it played (Unix seconds), if it records that.
-    pub last_played: Option<u64>,
 }
 
 impl Game {
@@ -92,7 +91,6 @@ impl Game {
             show_in_launcher: None,
             art: None,
             icon_source: None,
-            last_played: None,
         }
     }
 }

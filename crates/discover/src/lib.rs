@@ -128,7 +128,7 @@ pub fn find_games(known: &[PathBuf]) -> Vec<Suggestion> {
 
     let mut suggestions: Vec<Suggestion> = by_folder
         .into_values()
-        .filter_map(|(name, exe)| Some(Suggestion { reason: game_evidence(&exe)?, name, exe }))
+        .filter_map(|(name, exe)| Some(Suggestion { reason: game_evidence(&exe)?, name: better_name(name, &exe), exe }))
         .collect();
     suggestions.sort_by_key(|s| s.name.to_lowercase());
     suggestions
@@ -141,6 +141,15 @@ fn lower_dir(path: &Path) -> String {
 fn is_system(exe: &Path) -> bool {
     let windows = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into()).to_lowercase();
     exe.display().to_string().to_lowercase().starts_with(&windows)
+}
+
+/// The name the program gives itself (e.g. "World of Warcraft" for a
+/// shortcut called "Warmane - Lordaeron"), unless that looks like a tool's.
+fn better_name(name: String, exe: &Path) -> String {
+    match mulch_core::exe_info::product_name(exe) {
+        Some(product) if product.len() <= 60 && !preference(&product).0 => product,
+        _ => name,
+    }
 }
 
 /// Lower is better: names without tool words first, then shorter names.

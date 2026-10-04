@@ -9,11 +9,16 @@
 //!   games no longer sold on Steam (e.g. Rocket League), whose posters Steam
 //!   still hosts.
 //! - Ubisoft: Ubisoft's own thumbnail, from its public CDN (not 2:3, so last).
+//! - Any game: the portrait cover image on its English Wikipedia article,
+//!   for games that were never on Steam.
+//!
+//! Name lookups try the game's name, then (for games added by hand) the name
+//! its program gives itself, e.g. "World of Warcraft" for `Wow.exe`.
 //!
 //! Games with no poster anywhere keep their icon; the miss is remembered for
 //! a week so startup doesn't keep asking.
 
-use mulch_core::{Art, Game, Platform};
+use mulch_core::{Action, Art, Game, Platform};
 use serde_json::Value;
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
@@ -88,14 +93,16 @@ fn poster_for(game: &Game, dir: &Path, ubisoft: &[(u64, String)]) -> Option<Path
         Platform::Xbox => xbox_poster_url(game),
         _ => None,
     };
+    let names = search_names(game);
     let url = own_source
         .into_iter()
-        .chain(std::iter::once_with(|| steam_poster_url(&game.name)).flatten())
-        .chain(std::iter::once_with(|| wikidata_steam_id(&game.name).map(|id| steam_cdn_poster(&id))).flatten())
+        .chain(names.iter().filter_map(|name| steam_poster_url(name)))
+        .chain(names.iter().filter_map(|name| wikidata_steam_id(name).map(|id| steam_cdn_poster(&id))))
         .chain(
             std::iter::once_with(|| (game.platform == Platform::Ubisoft).then(|| ubisoft_thumbnail_url(game, ubisoft)).flatten())
                 .flatten(),
-        );
+        )
+        .chain(names.iter().filter_map(|name| wikipedia_cover_url(name)));
     // Try each candidate in turn until one actually downloads as an image.
     let downloaded = url.into_iter().find_map(|url| download(&url, dir, &key));
     match downloaded {
@@ -107,6 +114,46 @@ fn poster_for(game: &Game, dir: &Path, ubisoft: &[(u64, String)]) -> Option<Path
     }
 }
 
+/// Names to search for: the game's, and for games added by hand, the
+/// product name in its program's version information.
+fn search_names(game: &Game) -> Vec<String> {
+    let mut names = vec![game.name.clone()];
+    if let (Platform::Manual, Action::Exe { path, .. }) = (game.platform, &game.launch) {
+        if let Some(product) = mulch_core::exe_info::product_name(path) {
+            if normalise(&product) != normalise(&game.name) {
+                names.push(product);
+            }
+        }
+    }
+    names
+}
+
+/// The portrait image at the top of the game's English Wikipedia article
+/// (usually its box art), found by searching for the name as a video game
+/// and taking an article titled exactly that.
+fn wikipedia_cover_url(name: &str) -> Option<String> {
+    let wanted = normalise(name);
+    if wanted.is_empty() {
+        return None;
+    }
+    let result = get_json(&format!(
+        "https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch={}&gsrlimit=5\
+         &prop=pageimages&piprop=original&pilicense=any&format=json",
+        url_encode(&format!("{} video game", search_term(name)))
+    ))?;
+    result["query"]["pages"].as_object()?.values().find_map(|page| {
+        // "Doom (2016 video game)" counts as "Doom".
+        let title = page["title"].as_str()?;
+        let title = title.split(" (").next().unwrap_or(title);
+        if normalise(title) != wanted {
+            return None;
+        }
+        let image = &page["original"];
+        let (width, height) = (image["width"].as_u64()?, image["height"].as_u64()?);
+        (height > width).then(|| image["source"].as_str().map(str::to_string)).flatten()
+    })
+}
+
 fn recently_missed(marker: &Path) -> bool {
     fs::metadata(marker)
         .and_then(|m| m.modified())
@@ -116,7 +163,7 @@ fn recently_missed(marker: &Path) -> bool {
 }
 
 fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new().timeout(TIMEOUT).user_agent("MulchLauncher").build()
+    ureq::AgentBuilder::new().timeout(TIMEOUT).user_agent("MulchLauncher/0.1 (https://github.com/apotenza92/mulch-launcher)").build()
 }
 
 fn get_json(url: &str) -> Option<Value> {

@@ -26,7 +26,7 @@ pub fn libraries() -> Vec<Box<dyn Library>> {
 pub struct ScanResult {
     pub games: Vec<Game>,
     pub launchers: Vec<Launcher>,
-    /// Installed chat apps (Discord, WhatsApp, ...).
+    /// Installed chat apps (Discord, ...).
     pub social: Vec<Launcher>,
     /// How long each library took, for keeping startup fast.
     pub timings: Vec<(&'static str, Duration)>,
