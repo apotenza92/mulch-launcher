@@ -78,3 +78,12 @@ winresource = "0.1"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Dependencies (mostly the UI library) optimised even in dev builds: an
+# unoptimised UI takes ~20 ms a frame, making dragging and resizing choppy.
+# Our own code stays quick to rebuild.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev]
+opt-level = 1

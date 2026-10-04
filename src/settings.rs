@@ -9,6 +9,8 @@ use std::path::PathBuf;
 pub struct Settings {
     /// Whether first-run setup has been completed.
     pub setup_done: bool,
+    /// Chosen tile size (an index into `layout::TILE_SIZES`); the middle one if unset.
+    pub tile_size: Option<usize>,
 }
 
 pub fn data_dir() -> Option<PathBuf> {

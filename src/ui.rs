@@ -4,7 +4,9 @@
 
 use mulch_launcher::install;
 use mulch_launcher::launch;
-use mulch_launcher::layout::{COVER_ASPECT, GRID_GAP, GridLayout, HEADING_HEIGHT, fit_tiles};
+use mulch_launcher::layout::{
+    COVER_ASPECT, DEFAULT_SIZE, GRID_GAP, GridLayout, HEADING_HEIGHT, TILE_SIZES, grid_width, layout as grid_layout,
+};
 use mulch_art as art;
 use mulch_history::{self as history, History};
 use mulch_launcher::scan::{self, Action, Art, Game, Launcher, Platform, ScanResult};
@@ -40,7 +42,7 @@ pub fn run(pin_requested: bool) {
             // it. The title is still set for the taskbar and Alt+Tab.
             titlebar: Some(TitlebarOptions { title: Some(APP_NAME.into()), ..TitleBar::title_bar_options() }),
             app_owns_titlebar_drag: true,
-            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(1240.), px(820.)), cx))),
+            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, default_window_size(cx), cx))),
             // The width also grows to fit the toolbar (see `update_min_width`).
             window_min_size: Some(size(px(MIN_WINDOW_WIDTH), px(360.))),
             app_id: Some(APP_NAME.into()),
@@ -654,6 +656,24 @@ impl MulchApp {
                 h_flex()
                     .gap_2()
                     .child(
+                        Button::new("zoom-out")
+                            .ghost()
+                            .small()
+                            .icon(IconName::Minus)
+                            .disabled(self.tile_size() == 0)
+                            .tooltip("Smaller")
+                            .on_click(cx.listener(|app, _, _, cx| app.zoom(-1, cx))),
+                    )
+                    .child(
+                        Button::new("zoom-in")
+                            .ghost()
+                            .small()
+                            .icon(IconName::Plus)
+                            .disabled(self.tile_size() == TILE_SIZES.len() - 1)
+                            .tooltip("Bigger")
+                            .on_click(cx.listener(|app, _, _, cx| app.zoom(1, cx))),
+                    )
+                    .child(
                         Button::new("rescan")
                             .ghost()
                             .small()
@@ -691,6 +711,19 @@ impl MulchApp {
             .absolute()
             .size_full(),
         )
+    }
+
+    /// The chosen tile size (see `layout::TILE_SIZES`).
+    fn tile_size(&self) -> usize {
+        self.settings.tile_size.unwrap_or(DEFAULT_SIZE).min(TILE_SIZES.len() - 1)
+    }
+
+    /// Steps the tile size up or down one preset, and remembers it.
+    fn zoom(&mut self, step: isize, cx: &mut Context<Self>) {
+        let size = self.tile_size().saturating_add_signed(step).min(TILE_SIZES.len() - 1);
+        self.settings.tile_size = Some(size);
+        self.settings.save();
+        cx.notify();
     }
 
     /// The narrowest the window can be with the whole toolbar still showing.
@@ -853,6 +886,7 @@ impl MulchApp {
 
         div()
             .id(("game", ix))
+            .group("tile")
             .relative()
             .w(px(width))
             .cursor_pointer()
@@ -865,13 +899,48 @@ impl MulchApp {
                     .bg(theme.muted)
                     .child(artwork(game, width)),
             )
-            .child(div().pt_2().text_sm().font_medium().truncate().child(game.name.clone()))
+            .child(
+                // One line, cut short with "…"; hovering shows the whole name
+                // in a pill on top, on one line, over the neighbouring tiles if
+                // it's long (drawn last so nothing covers it).
+                div()
+                    .relative()
+                    .h(px(NAME_LINE_HEIGHT))
+                    .mt_2()
+                    .text_sm()
+                    .font_medium()
+                    .child(div().truncate().child(game.name.clone()))
+                    .child(
+                        deferred(
+                            div()
+                                .absolute()
+                                .top(px(-NAME_PILL_PADDING.1))
+                                .left(px(-NAME_PILL_PADDING.0))
+                                .px(px(NAME_PILL_PADDING.0))
+                                .py(px(NAME_PILL_PADDING.1))
+                                .whitespace_nowrap()
+                                .rounded_full()
+                                .bg(theme.popover)
+                                .border_1()
+                                .border_color(theme.border)
+                                .shadow_md()
+                                .invisible()
+                                .group_hover("tile", |s| s.visible())
+                                .child(game.name.clone()),
+                        )
+                        .with_priority(1),
+                    ),
+            )
             .child(div().text_xs().text_color(theme.muted_foreground).child(game.platform.label()))
             .into_any_element()
     }
 }
 
 const LAUNCHER_SIZE: f32 = 36.;
+/// A game name's line under its tile (text_sm).
+const NAME_LINE_HEIGHT: f32 = 20.;
+/// Padding around a hovered game's full name (horizontal, vertical; the border adds 1).
+const NAME_PILL_PADDING: (f32, f32) = (9., 3.);
 /// Labels for the recency groups (see `recency_groups`).
 const GROUP_NAMES: [&str; 3] = ["Played in the last week", "Played in the last month", "Everything else"];
 
@@ -887,14 +956,20 @@ const TOOLBAR_PADDING: f32 = 16.;
 const TOOLBAR_GAP: f32 = 16.;
 /// The window is never narrower than this, even with a short toolbar.
 const MIN_WINDOW_WIDTH: f32 = 480.;
-/// The title bar plus the toolbar.
-const HEADER_HEIGHT: f32 = 34. + TOOLBAR_HEIGHT;
 /// Minimise, maximise and close, on the right of the title bar, less its left padding.
 const WINDOW_CONTROLS_WIDTH: f32 = 3. * 34. - 12.;
-/// Slack so pixel rounding never clips the last row.
-const FIT_SLACK: f32 = 8.;
 /// Width kept free on the right so a scrollbar never overlaps the last column.
 const SCROLLBAR_ROOM: f32 = 8.;
+
+/// Opening size: square, wide enough for 8 games across at the default tile
+/// size, or as big as fits comfortably on a smaller screen.
+fn default_window_size(cx: &App) -> gpui_kit::Size<Pixels> {
+    let wanted = grid_width(8, TILE_SIZES[DEFAULT_SIZE]) + GRID_PADDING * 2. + SCROLLBAR_ROOM;
+    let screen = cx.primary_display().map(|d| d.bounds().size);
+    let fits = screen.map(|s| f32::from(s.width).min(f32::from(s.height)) * 0.9).unwrap_or(wanted);
+    let side = wanted.min(fits);
+    size(px(side), px(side))
+}
 
 /// Cover art fills as much of the tile as it can without cropping. Icons (already trimmed of transparent padding)
 /// sit centred at a fixed share of the tile, so they all look the same size.
@@ -942,17 +1017,14 @@ impl Render for MulchApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.update_min_width(window);
         let viewport = window.viewport_size();
-        let layout = fit_tiles(
+        let layout = grid_layout(
             &self.recency_groups(),
             f32::from(viewport.width) - GRID_PADDING * 2. - SCROLLBAR_ROOM,
-            f32::from(viewport.height) - HEADER_HEIGHT - GRID_PADDING * 2. - FIT_SLACK,
+            self.tile_size(),
         );
         let title_bar = self.title_bar(cx);
         let toolbar = self.toolbar(cx);
-        // Whole-pixel tile widths, and rows built explicitly rather than by
-        // wrapping: with fractional widths, wrapping could push a row's last
-        // tile down a line on some frames and back on others while resizing.
-        let layout = GridLayout { tile_width: layout.tile_width.floor(), ..layout };
+        // Rows built explicitly (rather than by wrapping) so each group starts a new row.
         let mut tiles: Vec<AnyElement> =
             self.games.iter().enumerate().map(|(ix, game)| self.tile(ix, game, &layout, cx)).collect();
         let muted = cx.theme().muted_foreground;
