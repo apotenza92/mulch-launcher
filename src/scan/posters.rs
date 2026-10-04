@@ -1,9 +1,14 @@
 //! Portrait posters for games whose launcher keeps no cover art on disk,
 //! fetched once from public sources (no logins, no API keys) and cached.
 //!
+//! Sources, tried in order until one has a poster:
+//! - Steam games: Steam's poster for the game's own app id.
 //! - Xbox / Microsoft Store: Microsoft's store catalogue, by package family name.
-//! - Everything else: Steam's poster for a game with exactly the same name.
-//! - Ubisoft, if not on Steam: Ubisoft's own thumbnail, from its public CDN.
+//! - Any game: Steam's poster for a game with exactly the same name.
+//! - Any game: Wikidata's record of the game's Steam app id. This also covers
+//!   games no longer sold on Steam (e.g. Rocket League), whose posters Steam
+//!   still hosts.
+//! - Ubisoft: Ubisoft's own thumbnail, from its public CDN (not 2:3, so last).
 //!
 //! Games with no poster anywhere keep their icon; the miss is remembered for
 //! a week so startup doesn't keep asking.
@@ -78,12 +83,22 @@ fn poster_for(game: &Game, dir: &Path, ubisoft: &[(u64, String)]) -> Option<Path
         return None;
     }
 
-    let url = match game.platform {
-        Platform::Xbox => xbox_poster_url(game).or_else(|| steam_poster_url(&game.name)),
-        Platform::Ubisoft => steam_poster_url(&game.name).or_else(|| ubisoft_thumbnail_url(game, ubisoft)),
-        _ => steam_poster_url(&game.name),
+    let own_source = match game.platform {
+        Platform::Steam => game.id.strip_prefix("steam:").map(steam_cdn_poster),
+        Platform::Xbox => xbox_poster_url(game),
+        _ => None,
     };
-    match url.and_then(|url| download(&url, dir, &key)) {
+    let url = own_source
+        .into_iter()
+        .chain(std::iter::once_with(|| steam_poster_url(&game.name)).flatten())
+        .chain(std::iter::once_with(|| wikidata_steam_id(&game.name).map(|id| steam_cdn_poster(&id))).flatten())
+        .chain(
+            std::iter::once_with(|| (game.platform == Platform::Ubisoft).then(|| ubisoft_thumbnail_url(game, ubisoft)).flatten())
+                .flatten(),
+        );
+    // Try each candidate in turn until one actually downloads as an image.
+    let downloaded = url.into_iter().find_map(|url| download(&url, dir, &key));
+    match downloaded {
         Some(path) => Some(path),
         None => {
             let _ = fs::write(&miss, b"");
@@ -155,7 +170,7 @@ fn steam_poster_url(name: &str) -> Option<String> {
     if wanted.is_empty() {
         return None;
     }
-    let results = get_json(&format!("https://steamcommunity.com/actions/SearchApps/{}", url_encode(name)))?;
+    let results = get_json(&format!("https://steamcommunity.com/actions/SearchApps/{}", url_encode(&search_term(name))))?;
     let app_id = results.as_array()?.iter().find_map(|app| {
         if normalise(app["name"].as_str()?) != wanted {
             return None;
@@ -163,7 +178,47 @@ fn steam_poster_url(name: &str) -> Option<String> {
         // Steam returns the id as text, but accept a number too.
         app["appid"].as_str().map(str::to_string).or_else(|| app["appid"].as_u64().map(|id| id.to_string()))
     })?;
-    Some(format!("https://steamcdn-a.akamaihd.net/steam/apps/{app_id}/library_600x900_2x.jpg"))
+    Some(steam_cdn_poster(&app_id))
+}
+
+fn steam_cdn_poster(app_id: &str) -> String {
+    format!("https://steamcdn-a.akamaihd.net/steam/apps/{app_id}/library_600x900_2x.jpg")
+}
+
+/// The Steam app id Wikidata records (property P1733) for a video game with
+/// exactly this name.
+fn wikidata_steam_id(name: &str) -> Option<String> {
+    let wanted = normalise(name);
+    let search = get_json(&format!(
+        "https://www.wikidata.org/w/api.php?action=wbsearchentities&search={}&language=en&type=item&limit=7&format=json",
+        url_encode(&search_term(name))
+    ))?;
+    let ids: Vec<&str> = search["search"]
+        .as_array()?
+        .iter()
+        .filter(|hit| hit["label"].as_str().is_some_and(|label| normalise(label) == wanted))
+        .filter(|hit| hit["description"].as_str().is_some_and(|d| d.to_lowercase().contains("video game")))
+        .filter_map(|hit| hit["id"].as_str())
+        .collect();
+    if ids.is_empty() {
+        return None;
+    }
+    let entities = get_json(&format!(
+        "https://www.wikidata.org/w/api.php?action=wbgetentities&ids={}&props=claims&format=json",
+        ids.join("|")
+    ))?;
+    ids.iter().find_map(|id| {
+        entities["entities"][*id]["claims"]["P1733"]
+            .as_array()?
+            .iter()
+            .find_map(|claim| claim["mainsnak"]["datavalue"]["value"].as_str().map(str::to_string))
+    })
+}
+
+/// The name as typed into a search box: without trademark symbols, which
+/// launchers add ("Rocket League®") but search engines don't index.
+fn search_term(name: &str) -> String {
+    name.chars().filter(|c| !matches!(c, '®' | '™' | '©')).collect::<String>().trim().to_string()
 }
 
 /// Lowercase letters and digits only, so "Call of Duty®" matches "Call of Duty".
@@ -276,6 +331,7 @@ mod tests {
         assert_eq!(normalise("Call of Duty®"), normalise("call of duty"));
         assert_eq!(normalise("Battlefield™ 6"), "battlefield6");
         assert_ne!(normalise("Trackmania"), normalise("TrackMania Nations Forever"));
+        assert_eq!(search_term("Rocket League®"), "Rocket League");
     }
 
     #[test]
