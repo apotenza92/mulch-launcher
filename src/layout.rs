@@ -50,9 +50,9 @@ pub fn grid_width(columns: usize, tile: f32) -> f32 {
 }
 
 /// `groups`: how many games in each group, top to bottom (in the same order
-/// as the games themselves). Each group takes as few rows as fit, with its
-/// games spread as evenly as possible and any extra on the top rows (5 games
-/// at 4 across: 3 then 2, never 4 then 1).
+/// as the games themselves). Each group fills full rows, so widening the
+/// window always reflows, with leftovers on a shorter last row; but never a
+/// lone game there: the row above lends it one (5 at 4 across: 3 then 2).
 pub fn layout(groups: &[usize], width: f32, size: usize) -> GridLayout {
     let tile_width = TILE_SIZES[size.min(TILE_SIZES.len() - 1)];
     let across = columns(width, tile_width);
@@ -61,8 +61,17 @@ pub fn layout(groups: &[usize], width: f32, size: usize) -> GridLayout {
         .enumerate()
         .filter(|(_, count)| **count > 0)
         .map(|(group, &count)| {
-            let row_count = count.div_ceil(across);
-            let rows = (0..row_count).map(|ix| count / row_count + usize::from(ix < count % row_count)).collect();
+            let mut rows = vec![across; count / across];
+            if count % across > 0 {
+                rows.push(count % across);
+            }
+            if let [.., above, last] = rows.as_mut_slice()
+                && *last == 1
+                && *above >= 3
+            {
+                *above -= 1;
+                *last += 1;
+            }
             Section { group, rows }
         })
         .collect();
@@ -94,12 +103,14 @@ mod tests {
     }
 
     #[test]
-    fn each_group_starts_a_row_and_rows_are_balanced() {
+    fn each_group_fills_full_rows_without_a_lone_game() {
         let width = grid_width(7, 180.);
-        assert_eq!(rows(&layout(&[3, 2, 12], width, DEFAULT_SIZE)), vec![vec![3], vec![2], vec![6, 6]]);
-        assert_eq!(rows(&layout(&[0, 5, 13], width, DEFAULT_SIZE)), vec![vec![5], vec![7, 6]]);
+        assert_eq!(rows(&layout(&[3, 2, 12], width, DEFAULT_SIZE)), vec![vec![3], vec![2], vec![7, 5]]);
+        assert_eq!(rows(&layout(&[0, 5, 15], width, DEFAULT_SIZE)), vec![vec![5], vec![7, 6, 2]]);
         assert_eq!(rows(&layout(&[5], grid_width(4, 180.), DEFAULT_SIZE)), vec![vec![3, 2]]);
-        assert_eq!(rows(&layout(&[17], width, DEFAULT_SIZE)), vec![vec![6, 6, 5]]);
+        assert_eq!(rows(&layout(&[12], grid_width(10, 180.), DEFAULT_SIZE)), vec![vec![10, 2]]);
+        // Too narrow to lend one: 2 across stays 2 then 1.
+        assert_eq!(rows(&layout(&[3], grid_width(2, 180.), DEFAULT_SIZE)), vec![vec![2, 1]]);
         assert_eq!(layout(&[0, 5, 13], width, DEFAULT_SIZE).sections[0].group, 1);
     }
 

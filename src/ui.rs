@@ -322,12 +322,20 @@ impl MulchApp {
         cx.notify();
     }
 
-    fn play_card(&self, pending: &PendingPlay, cx: &mut Context<Self>) -> AnyElement {
+    fn play_card(&self, pending: &PendingPlay, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        // Wide enough for "Play <name>" (up to a limit; longer names are cut short).
+        let mut label = format!("Play {}", pending.game.name);
+        let mut chars: Vec<char> = pending.game.name.chars().collect();
+        while text_width(&label, window, cx) + PLAY_LABEL_ROOM > PLAY_CARD_MAX_WIDTH && chars.len() > 1 {
+            chars.pop();
+            label = format!("Play {}…", chars.iter().collect::<String>().trim_end());
+        }
+        let card_width = (text_width(&label, window, cx) + PLAY_LABEL_ROOM).clamp(PLAY_CARD_WIDTH, PLAY_CARD_MAX_WIDTH);
         let theme = cx.theme();
         let card = v_flex()
             .id("play-card")
             .occlude()
-            .w(px(PLAY_CARD_WIDTH))
+            .w(px(card_width))
             .p(px(PLAY_CARD_PADDING))
             .gap_2()
             .rounded_lg()
@@ -341,7 +349,7 @@ impl MulchApp {
                     .w_full()
                     .h(px(PLAY_BUTTON_HEIGHT))
                     .icon(IconName::Play)
-                    .label("Play")
+                    .label(label)
                     .on_click(cx.listener(|app, _, window, cx| app.play_pending(window, cx))),
             )
             .children(self.secondary_action(&pending.game, cx))
@@ -371,7 +379,7 @@ impl MulchApp {
                         .position_mode(AnchoredPositionMode::Window)
                         .position(pending.at)
                         // Put the middle of the Play button under the cursor.
-                        .offset(point(px(-PLAY_CARD_WIDTH / 2.), px(-(PLAY_CARD_PADDING + PLAY_BUTTON_HEIGHT / 2.))))
+                        .offset(point(px(-card_width / 2.), px(-(PLAY_CARD_PADDING + PLAY_BUTTON_HEIGHT / 2.))))
                         .snap_to_window_with_margin(px(8.))
                         .child(card),
                 ),
@@ -875,7 +883,11 @@ const GROUP_NAMES: [&str; 3] = ["Played in the last week", "Played in the last m
 
 /// How much of a tile's width an icon (rather than cover art) takes up.
 const ICON_SHARE: f32 = 0.6;
+/// The play card's width: at least this, more for a long "Play <name>", at most the max.
 const PLAY_CARD_WIDTH: f32 = 180.;
+const PLAY_CARD_MAX_WIDTH: f32 = 340.;
+/// Room around the Play label: the play icon and gap, the button's and the card's padding.
+const PLAY_LABEL_ROOM: f32 = 72.;
 const PLAY_CARD_PADDING: f32 = 8.;
 const PLAY_BUTTON_HEIGHT: f32 = 36.;
 /// Space above and below the grid.
@@ -964,11 +976,15 @@ fn quick_tooltip(id: &'static str, text: &'static str, child: impl IntoElement) 
 
 /// Whether a game's name (text_sm, medium weight) is too wide for its tile.
 fn name_is_cut_short(name: &str, width: f32, window: &Window, cx: &App) -> bool {
+    text_width(name, window, cx) > width
+}
+
+/// Width of a line of text_sm, medium-weight text.
+fn text_width(text: &str, window: &Window, cx: &App) -> f32 {
     let font = Font { weight: FontWeight::MEDIUM, ..font(cx.theme().font_family.clone()) };
-    let run = TextRun { len: name.len(), font, color: Hsla::default(), background_color: None, underline: None, strikethrough: None };
+    let run = TextRun { len: text.len(), font, color: Hsla::default(), background_color: None, underline: None, strikethrough: None };
     let font_size = rems(0.875).to_pixels(window.rem_size());
-    let line = window.text_system().shape_line(SharedString::from(name.to_string()), font_size, &[run], None);
-    f32::from(line.width) > width
+    f32::from(window.text_system().shape_line(SharedString::from(text.to_string()), font_size, &[run], None).width)
 }
 
 /// A full-width, left-aligned button for the play card.
@@ -1021,7 +1037,7 @@ impl Render for MulchApp {
         }
         let empty = !self.scanning && self.games.is_empty();
 
-        let play_card = self.pending_play.as_ref().map(|pending| self.play_card(pending, cx));
+        let play_card = self.pending_play.as_ref().map(|pending| self.play_card(pending, window, cx));
         let add_panel = self.add_panel.as_ref().map(|panel| self.add_panel(panel, cx));
 
         v_flex().relative().size_full().children(play_card).children(add_panel).child(title_bar).child(toolbar).child(
