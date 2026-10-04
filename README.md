@@ -4,6 +4,8 @@
 
 <p align="center">One launcher for all your games.</p>
 
-<p align="center"><a href="https://apotenza92.github.io/mulch-launcher/">Download</a> · Windows only, for now</p>
+<p align="center"><a href="https://apps.microsoft.com/detail/9NQK96N5M6PH?mode=direct"><img src="https://get.microsoft.com/images/en-us%20dark.svg" width="200" alt="Get it from Microsoft"></a></p>
+
+<p align="center">Windows only, for now</p>
 
 ![The library](docs/screenshots/library.png)
