@@ -21,7 +21,10 @@ use gpui_kit::component::{WindowExt, *};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use mulch_discover::Suggestion;
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::path::PathBuf;
 
 const APP_NAME: &str = "MulchLauncher";
@@ -39,7 +42,8 @@ pub fn run(pin_requested: bool) {
             titlebar: Some(TitlebarOptions { title: Some(APP_NAME.into()), ..TitleBar::title_bar_options() }),
             app_owns_titlebar_drag: true,
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(1240.), px(820.)), cx))),
-            window_min_size: Some(size(px(480.), px(360.))),
+            // The width also grows to fit the toolbar (see `update_min_width`).
+            window_min_size: Some(size(px(MIN_WINDOW_WIDTH), px(360.))),
             app_id: Some(APP_NAME.into()),
             ..Default::default()
         };
@@ -56,6 +60,11 @@ struct MulchApp {
     settings: Settings,
     /// "Add game manually", while it's showing.
     add_panel: Option<AddPanel>,
+    /// Natural widths of the toolbar's left, middle and right groups, measured
+    /// as they're laid out, which set the window's minimum width.
+    toolbar_widths: Rc<[Cell<f32>; 3]>,
+    /// The native window, once known.
+    hwnd: Option<isize>,
     scanning: bool,
     /// A game the user clicked, waiting for a second click on Play.
     pending_play: Option<PendingPlay>,
@@ -108,6 +117,8 @@ impl MulchApp {
             social: Vec::new(),
             settings,
             add_panel: None,
+            toolbar_widths: Rc::default(),
+            hwnd: None,
             scanning: false,
             pending_play: None,
             history: History::load(),
@@ -619,14 +630,13 @@ impl MulchApp {
         h_flex()
             .flex_shrink_0()
             .h(px(TOOLBAR_HEIGHT))
-            .px_4()
-            .gap_4()
-            .child(h_flex().flex_1().gap_3().children(launcher_icons))
-            .child(h_flex().gap_3().children(social_icons))
-            .child(
+            .px(px(TOOLBAR_PADDING))
+            .gap(px(TOOLBAR_GAP))
+            .child(h_flex().flex_1().child(self.measured(0, h_flex().gap_3().children(launcher_icons))))
+            .child(self.measured(1, h_flex().gap_3().children(social_icons)))
+            .child(h_flex().flex_1().justify_end().child(self.measured(
+                2,
                 h_flex()
-                    .flex_1()
-                    .justify_end()
                     .gap_2()
                     .child(
                         Button::new("rescan")
@@ -645,8 +655,48 @@ impl MulchApp {
                             .label("Add game manually")
                             .on_click(cx.listener(|app, _, _, cx| app.open_add_panel(cx))),
                     ),
-            )
+            )))
             .into_any_element()
+    }
+
+    /// A toolbar group at its natural width, recording that width (in slot
+    /// `ix`) each time it's laid out.
+    fn measured(&self, ix: usize, group: Div) -> Div {
+        let widths = self.toolbar_widths.clone();
+        group.flex_shrink_0().relative().child(
+            canvas(
+                move |bounds, window, _| {
+                    let width = f32::from(bounds.size.width);
+                    if widths[ix].replace(width) != width {
+                        window.refresh();
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .size_full(),
+        )
+    }
+
+    /// The narrowest the window can be with the whole toolbar still showing,
+    /// chat apps centred.
+    fn toolbar_min_width(&self) -> f32 {
+        let [left, middle, right] = [0, 1, 2].map(|ix| self.toolbar_widths[ix].get());
+        TOOLBAR_PADDING * 2. + TOOLBAR_GAP * 2. + middle + left.max(right) * 2.
+    }
+
+    /// Keeps the window at least as wide as the toolbar needs.
+    fn update_min_width(&mut self, window: &Window) {
+        if self.hwnd.is_none() {
+            if let Ok(RawWindowHandle::Win32(handle)) = HasWindowHandle::window_handle(window).map(|h| h.as_raw()) {
+                let hwnd = handle.hwnd.get();
+                crate::min_width::install(hwnd);
+                self.hwnd = Some(hwnd);
+            }
+        }
+        if let Some(hwnd) = self.hwnd {
+            crate::min_width::set(hwnd, self.toolbar_min_width().max(MIN_WINDOW_WIDTH));
+        }
     }
 
     /// "Add game manually": games found on this PC, ticked, plus a file picker
@@ -798,6 +848,10 @@ const PLAY_BUTTON_HEIGHT: f32 = 36.;
 const GRID_PADDING: f32 = 20.;
 /// The toolbar under the title bar.
 const TOOLBAR_HEIGHT: f32 = 52.;
+const TOOLBAR_PADDING: f32 = 16.;
+const TOOLBAR_GAP: f32 = 16.;
+/// The window is never narrower than this, even with a short toolbar.
+const MIN_WINDOW_WIDTH: f32 = 480.;
 /// The title bar plus the toolbar.
 const HEADER_HEIGHT: f32 = 34. + TOOLBAR_HEIGHT;
 /// Minimise, maximise and close, on the right of the title bar, less its left padding.
@@ -851,6 +905,7 @@ fn run_action(action: &Action, name: &str, window: &mut Window, cx: &mut App) {
 
 impl Render for MulchApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.update_min_width(window);
         let viewport = window.viewport_size();
         let layout = fit_tiles(
             self.games.len(),
@@ -863,11 +918,12 @@ impl Render for MulchApp {
         // wrapping: with fractional widths, wrapping could push a row's last
         // tile down a line on some frames and back on others while resizing.
         let layout = GridLayout { tile_width: layout.tile_width.floor(), ..layout };
+        let row_sizes = layout.rows.clone();
         let mut tiles: Vec<AnyElement> =
             self.games.iter().enumerate().map(|(ix, game)| self.tile(ix, game, &layout, cx)).collect();
         let mut rows = Vec::new();
-        while !tiles.is_empty() {
-            let rest = tiles.split_off(layout.columns.min(tiles.len()));
+        for size in row_sizes {
+            let rest = tiles.split_off(size.min(tiles.len()));
             rows.push(h_flex().items_start().gap(px(GRID_GAP)).children(std::mem::replace(&mut tiles, rest)));
         }
         let empty = !self.scanning && self.games.is_empty();
@@ -894,10 +950,10 @@ impl Render for MulchApp {
                     .flex_1()
                     .overflow_y_scroll()
                     .p(px(GRID_PADDING))
-                    // Tiles flow from the top left, across then down.
+                    // A pyramid from the top: rows grow downwards, each centred.
                     .flex()
                     .items_start()
-                    .justify_start()
+                    .justify_center()
                     .when(empty, |this| {
                         this.child(
                             v_flex()
@@ -914,7 +970,7 @@ impl Render for MulchApp {
                                 ),
                         )
                     })
-                    .child(v_flex().gap(px(GRID_GAP)).children(rows)),
+                    .child(v_flex().w_full().items_center().gap(px(GRID_GAP)).children(rows)),
             )
     }
 }

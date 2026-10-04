@@ -4087,6 +4087,7 @@ dependencies = [
  "mulch-steam",
  "mulch-ubisoft",
  "mulch-xbox",
+ "raw-window-handle",
  "serde",
  "serde_json",
  "windows 0.61.3",

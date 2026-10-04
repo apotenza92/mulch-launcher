@@ -1,130 +1,167 @@
-//! Grid sizing, like a responsive web grid: tiles always stretch to fill the
-//! window's width exactly, in an even number of columns (2, 4, 6, 8, ...).
-//! 8 columns by default; more when that gets every game on screen without
-//! scrolling (down to a minimum tile size), and more when tiles would
-//! otherwise get too big. Narrow windows drop columns when tiles would get
-//! too small. The grid scrolls only when games can't all fit.
+//! Grid sizing: a pyramid of games, most recently played at the top.
 //!
-//! The same window size always gives the same layout, and tiles grow and
-//! shrink smoothly between column changes.
+//! Built from the bottom up: the widest row at the bottom, each row above 2
+//! games narrower (..., 9, 7, 5, 3), and the top row takes whatever is left
+//! (split as 1 above the rest if that's even), so rows only ever grow
+//! downwards and one game always sits in the middle. With more games than a pyramid holds, the widest row repeats at the
+//! bottom. The widest row is whatever gives the biggest tiles that get every
+//! game on screen. Every row is centred.
+//!
+//! Only when that would make tiles too small to read does the grid scroll
+//! instead, with rows as wide as readable tiles allow.
 
 /// Cover art is portrait 2:3.
 pub const COVER_ASPECT: f32 = 1.5;
 pub const GRID_GAP: f32 = 16.;
 /// Name (text_sm) + platform (text_xs) + the padding above them.
 pub const LABEL_HEIGHT: f32 = 50.;
-pub const DEFAULT_COLUMNS: usize = 8;
-/// Smallest tile width; narrower windows use fewer columns.
-pub const MIN_TILE: f32 = 80.;
-/// Largest tile width; wider windows use more columns.
-pub const MAX_TILE: f32 = 260.;
+/// Below this, names get too truncated to read, so the grid scrolls instead.
+pub const MIN_TILE: f32 = 110.;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GridLayout {
     pub tile_width: f32,
-    pub columns: usize,
+    /// How many games in each row, top to bottom.
+    pub rows: Vec<usize>,
     /// True when the games don't all fit and the grid scrolls.
     pub scrolls: bool,
 }
 
-/// Width of each tile when `columns` tiles fill `width` exactly.
-fn filling_width(width: f32, columns: usize) -> f32 {
+/// Widest tile that fits `columns` across `width`.
+fn width_limit(width: f32, columns: usize) -> f32 {
     (width - (columns as f32 - 1.) * GRID_GAP) / columns as f32
 }
 
-fn grid_height(count: usize, columns: usize, tile_width: f32) -> f32 {
-    let rows = count.div_ceil(columns).max(1) as f32;
-    rows * (tile_width * COVER_ASPECT + LABEL_HEIGHT) + (rows - 1.) * GRID_GAP
+/// Widest tile (labels included below it) that fits `rows` down `height`.
+fn height_limit(height: f32, rows: usize) -> f32 {
+    ((height - (rows as f32 - 1.) * GRID_GAP) / rows as f32 - LABEL_HEIGHT) / COVER_ASPECT
 }
 
-/// Most even columns of at least `MIN_TILE` that fit in `width` (at least 2,
-/// even if that makes tiles a little smaller than the minimum).
-fn columns_at_min(width: f32) -> usize {
-    let fit = ((width + GRID_GAP) / (MIN_TILE + GRID_GAP)).floor() as usize;
-    (fit - fit % 2).max(2)
+/// Games a pyramid with an odd `widest` row holds (1 + 3 + ... + widest).
+fn capacity(widest: usize) -> usize {
+    widest.div_ceil(2).pow(2)
 }
 
-/// Fewest even columns that keep tiles at or under `MAX_TILE`.
-fn columns_at_max(width: f32) -> usize {
-    let needed = (((width + GRID_GAP) / (MAX_TILE + GRID_GAP)).ceil() as usize).max(2);
-    needed + needed % 2
+/// Row sizes, top to bottom, for a pyramid whose bottom row has `widest` games.
+fn pyramid(count: usize, widest: usize) -> Vec<usize> {
+    let mut rows = Vec::new();
+    let (mut left, mut size) = (count, widest);
+    while left > 0 {
+        let row = size.min(left);
+        rows.push(row);
+        left -= row;
+        // Narrow by 2 once the rest fits in a pyramid of that width.
+        if size > 2 && left <= capacity(size - 2) {
+            size -= 2;
+        }
+    }
+    rows.reverse();
+    // An even top row has no middle game: lift one game above it.
+    if rows.len() > 1 && rows[0] % 2 == 0 {
+        rows[0] -= 1;
+        rows.insert(0, 1);
+    }
+    rows
 }
 
 pub fn fit_tiles(count: usize, width: f32, height: f32) -> GridLayout {
-    let most = columns_at_min(width);
-    let mut columns = DEFAULT_COLUMNS.min(most).max(columns_at_max(width));
-    // Prefer more, smaller tiles over scrolling: add columns two at a time
-    // until every game fits on screen or tiles reach the minimum size.
-    while columns + 2 <= most && grid_height(count, columns, filling_width(width, columns)) > height {
-        columns += 2;
+    let count = count.max(1);
+    let fits = |rows: &Vec<usize>| {
+        let widest = rows.iter().copied().max().unwrap_or(1);
+        width_limit(width, widest).min(height_limit(height, rows.len()))
+    };
+    // Every widest row (odd, so something is always in the middle); ties go
+    // to the narrower, more pyramid-shaped one.
+    let best = (1..=count + 1)
+        .step_by(2)
+        .map(|widest| pyramid(count, widest))
+        .map(|rows| (fits(&rows), rows))
+        .fold(None::<(f32, Vec<usize>)>, |best, option| match best {
+            Some(best) if option.0 <= best.0 + 0.5 => Some(best),
+            _ => Some(option),
+        })
+        .expect("at least one arrangement");
+
+    if best.0 >= MIN_TILE {
+        return GridLayout { tile_width: best.0, rows: best.1, scrolls: false };
     }
-    let tile_width = filling_width(width, columns).max(1.);
-    GridLayout { tile_width, columns, scrolls: grid_height(count, columns, tile_width) > height }
+    // Too many games to show readably at once: rows as wide as readable
+    // tiles allow, stretched to fill the width, and scroll.
+    let fit = ((width + GRID_GAP) / (MIN_TILE + GRID_GAP)).floor() as usize;
+    let widest = (fit - (fit + 1) % 2).max(1);
+    let rows = pyramid(count, widest);
+    let columns = rows.iter().copied().max().unwrap_or(1);
+    GridLayout { tile_width: width_limit(width, columns).max(1.), rows, scrolls: true }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn fills_width(layout: GridLayout, width: f32) -> bool {
-        (layout.columns as f32 * (layout.tile_width + GRID_GAP) - GRID_GAP - width).abs() < 0.5
+    fn grid_size(layout: &GridLayout) -> (f32, f32) {
+        let columns = layout.rows.iter().copied().max().unwrap() as f32;
+        let rows = layout.rows.len() as f32;
+        (
+            columns * layout.tile_width + (columns - 1.) * GRID_GAP,
+            rows * (layout.tile_width * COVER_ASPECT + LABEL_HEIGHT) + (rows - 1.) * GRID_GAP,
+        )
     }
 
     #[test]
-    fn eight_columns_at_normal_sizes() {
-        for width in [1000., 1200., 1600., 2000.] {
-            let layout = fit_tiles(8, width, 1200.);
-            assert_eq!(layout.columns, DEFAULT_COLUMNS, "width {width}");
-            assert!(fills_width(layout, width));
+    fn pyramids_build_from_the_bottom() {
+        assert_eq!(pyramid(17, 9), vec![1, 7, 9]);
+        assert_eq!(pyramid(60, 9), vec![3, 5, 7, 9, 9, 9, 9, 9]);
+        assert_eq!(pyramid(16, 7), vec![1, 3, 5, 7]);
+        assert_eq!(pyramid(2, 99), vec![2]);
+        assert_eq!(pyramid(17, 13), vec![1, 3, 13]);
+    }
+
+    #[test]
+    fn every_game_is_placed() {
+        for count in 1..60 {
+            let layout = fit_tiles(count, 1200., 700.);
+            assert_eq!(layout.rows.iter().sum::<usize>(), count);
         }
     }
 
     #[test]
-    fn narrow_windows_use_fewer_columns() {
-        let layout = fit_tiles(17, 600., 700.);
-        assert!(layout.columns < DEFAULT_COLUMNS);
+    fn everything_fits_on_screen_when_it_can() {
+        for (count, width, height) in [(17, 1200., 700.), (17, 900., 1000.), (5, 1600., 400.), (40, 2400., 1300.)] {
+            let layout = fit_tiles(count, width, height);
+            assert!(!layout.scrolls, "{count} games in {width}x{height}");
+            let (w, h) = grid_size(&layout);
+            assert!(w <= width + 0.01 && h <= height + 0.01, "{count} games in {width}x{height}: {w}x{h}");
+        }
+    }
+
+    #[test]
+    fn rows_grow_downwards_and_are_odd() {
+        for count in 1..80 {
+            let rows = fit_tiles(count, 1400., 800.).rows;
+            assert!(rows.windows(2).all(|pair| pair[0] <= pair[1]), "{count} games: {rows:?}");
+            assert!(rows.len() == 1 || rows.iter().all(|row| row % 2 == 1), "{count} games: {rows:?}");
+        }
+    }
+
+    #[test]
+    fn tiles_grow_with_the_window() {
+        let mut last = 0.;
+        for step in 0..200 {
+            let size = 700. + step as f32 * 10.;
+            let layout = fit_tiles(17, size * 1.5, size);
+            if layout.scrolls {
+                continue;
+            }
+            assert!(layout.tile_width >= last, "tiles shrank at {size}");
+            last = layout.tile_width;
+        }
+    }
+
+    #[test]
+    fn too_many_games_scroll_with_readable_tiles() {
+        let layout = fit_tiles(300, 1200., 700.);
+        assert!(layout.scrolls);
         assert!(layout.tile_width >= MIN_TILE);
-        assert!(fills_width(layout, 600.));
-    }
-
-    #[test]
-    fn very_wide_windows_use_more_columns() {
-        let layout = fit_tiles(17, 3000., 1200.);
-        assert!(layout.columns > DEFAULT_COLUMNS);
-        assert!(layout.tile_width <= MAX_TILE);
-        assert!(fills_width(layout, 3000.));
-    }
-
-    #[test]
-    fn columns_never_drop_as_the_window_widens() {
-        let mut last = 0;
-        for width in (300..4000).step_by(7) {
-            let columns = fit_tiles(17, width as f32, 700.).columns;
-            assert!(columns >= last, "columns dropped at width {width}");
-            last = columns;
-        }
-    }
-
-    #[test]
-    fn adds_columns_to_avoid_scrolling() {
-        // 17 games at 8 columns need 3 rows, which don't fit 700px; 10 columns fit in 2.
-        let layout = fit_tiles(17, 1200., 700.);
-        assert_eq!(layout.columns, 10);
-        assert!(!layout.scrolls);
-        assert!(fills_width(layout, 1200.));
-    }
-
-    #[test]
-    fn columns_are_always_even() {
-        for width in (200..5000).step_by(13) {
-            let columns = fit_tiles(17, width as f32, 700.).columns;
-            assert_eq!(columns % 2, 0, "{columns} columns at width {width}");
-        }
-    }
-
-    #[test]
-    fn scrolls_only_when_games_do_not_fit() {
-        assert!(!fit_tiles(8, 1200., 700.).scrolls);
-        assert!(fit_tiles(60, 1200., 700.).scrolls);
+        assert!(grid_size(&layout).0 <= 1200.5);
     }
 }
