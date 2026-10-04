@@ -11,13 +11,13 @@ use std::path::{Path, PathBuf};
 
 /// The glyph of `icon` in `ink` (RGB), cached next to it. None if unreadable.
 pub fn glyph(icon: &Path, ink: [u8; 3]) -> Option<PathBuf> {
-    let name = format!("{}-glyph-{:02x}{:02x}{:02x}.png", icon.file_stem()?.to_string_lossy(), ink[0], ink[1], ink[2]);
+    let name = format!("{}-glyph2-{:02x}{:02x}{:02x}.png", icon.file_stem()?.to_string_lossy(), ink[0], ink[1], ink[2]);
     let out = icon.with_file_name(name);
     if out.is_file() {
         return Some(out);
     }
     let image = image::open(icon).ok()?.to_rgba8();
-    make_glyph(&image, ink).save(&out).ok()?;
+    trim_square(&make_glyph(&image, ink)).save(&out).ok()?;
     Some(out)
 }
 
@@ -60,6 +60,29 @@ fn make_glyph(image: &RgbaImage, ink: [u8; 3]) -> RgbaImage {
     if out.pixels().filter(|p| p[3] > 128).count() < 20 {
         for (x, y, p) in image.enumerate_pixels() {
             out.put_pixel(x, y, Rgba([ink[0], ink[1], ink[2], p[3]]));
+        }
+    }
+    out
+}
+
+/// Crops away empty space around the glyph (where the icon's tile was),
+/// keeping it square and centred so every glyph fills its button alike.
+fn trim_square(glyph: &RgbaImage) -> RgbaImage {
+    let mut bounds: Option<(u32, u32, u32, u32)> = None;
+    for (x, y, p) in glyph.enumerate_pixels() {
+        if p[3] > 24 {
+            let b = bounds.get_or_insert((x, y, x, y));
+            *b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
+        }
+    }
+    let Some((left, top, right, bottom)) = bounds else { return glyph.clone() };
+    let (w, h) = (right - left + 1, bottom - top + 1);
+    let side = w.max(h);
+    let mut out = RgbaImage::new(side, side);
+    let (ox, oy) = ((side - w) / 2, (side - h) / 2);
+    for y in 0..h {
+        for x in 0..w {
+            out.put_pixel(ox + x, oy + y, *glyph.get_pixel(left + x, top + y));
         }
     }
     out

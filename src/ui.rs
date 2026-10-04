@@ -465,10 +465,10 @@ impl MulchApp {
             // The launcher's own logo, as a glyph in the button's ink.
             let content = match self.glyphs.get(&game.platform) {
                 Some((on_dark, on_light)) => img(if dark { on_dark.clone() } else { on_light.clone() })
-                    .size(px(GLASS_BUTTON * 0.5))
+                    .size(px(GLASS_BUTTON * GLYPH_FILL))
                     .object_fit(ObjectFit::Contain)
                     .into_any_element(),
-                None => Icon::new(IconName::ExternalLink).size(px(GLASS_BUTTON * 0.42)).into_any_element(),
+                None => Icon::new(IconName::ExternalLink).size(px(GLASS_BUTTON * ICON_FILL)).into_any_element(),
             };
             let button = glass_button_with("show-launcher", content, GLASS_BUTTON, false, dark).on_click(cx.listener(
                 move |app, _, window, cx| {
@@ -499,7 +499,7 @@ impl MulchApp {
 
         // Play in the middle of the poster.
         let (width, height) = size;
-        let half = GLASS_PLAY_BUTTON / 2.;
+        let half = (GLASS_PLAY_BUTTON + GLASS_GROW) / 2.;
         let (x, y) = (width / 2., height / 2.);
         let g = game.clone();
         let play = glass_button("play", IconName::Play, GLASS_PLAY_BUTTON, false, dark).on_click(cx.listener(
@@ -1500,7 +1500,7 @@ fn text_width(text: &str, window: &Window, cx: &App) -> f32 {
 /// with a dark icon in light mode, dark glass with a white icon in dark mode.
 /// `danger` tints it red (a remove waiting to be confirmed).
 fn glass_button(id: &'static str, icon: IconName, size: f32, danger: bool, dark: bool) -> Stateful<Div> {
-    glass_button_with(id, Icon::new(icon).size(px(size * 0.42)).into_any_element(), size, danger, dark)
+    glass_button_with(id, Icon::new(icon).size(px(size * ICON_FILL)).into_any_element(), size, danger, dark)
 }
 
 /// A glass button around any content (e.g. a launcher's glyph).
@@ -1510,28 +1510,54 @@ fn glass_button_with(id: &'static str, content: AnyElement, size: f32, danger: b
     } else {
         (gpui_kit::white(), gpui_kit::black().opacity(0.8), gpui_kit::black().opacity(0.12))
     };
-    let (fill, hover, ink) = if danger {
-        (gpui_kit::red().opacity(0.75), gpui_kit::red().opacity(0.9), gpui_kit::white())
+    let (fill, hover, ink, glow) = if danger {
+        (gpui_kit::red().opacity(0.75), gpui_kit::red().opacity(0.95), gpui_kit::white(), gpui_kit::red().opacity(0.7))
     } else if dark {
-        (glass.opacity(0.45), glass.opacity(0.65), ink)
+        (glass.opacity(0.45), glass.opacity(0.7), ink, gpui_kit::white().opacity(0.45))
     } else {
-        (glass.opacity(0.7), glass.opacity(0.9), ink)
+        (glass.opacity(0.7), glass.opacity(0.95), ink, gpui_kit::white().opacity(0.9))
     };
-    div()
-        .id(id)
-        .size(px(size))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_full()
-        .bg(fill)
-        .border_1()
-        .border_color(edge)
-        .shadow_md()
-        .text_color(ink)
-        .hover(move |style| style.bg(hover))
-        .child(content)
+    // Hovered, it grows a little, brightens and glows; the slot it sits in
+    // stays the same size, so nothing around it moves.
+    let grown = size + GLASS_GROW;
+    let group: SharedString = format!("glass-{id}").into();
+    div().id(id).group(group.clone()).size(px(grown)).flex().items_center().justify_center().child(
+        div()
+            .relative()
+            .size(px(size))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .bg(fill)
+            .border_1()
+            .border_color(edge)
+            .shadow_md()
+            .text_color(ink)
+            .group_hover(group, move |style| {
+                style.size(px(grown)).bg(hover).border_color(gpui_kit::white().opacity(0.7)).shadow(vec![BoxShadow {
+                    color: glow,
+                    offset: point(px(0.), px(0.)),
+                    blur_radius: px(18.),
+                    spread_radius: px(1.),
+                    inset: false,
+                }])
+            })
+            // Glassy: light catching the top of the dome.
+            .child(div().absolute().top_0().left_0().size_full().rounded_full().bg(linear_gradient(
+                180.,
+                linear_color_stop(gpui_kit::white().opacity(0.28), 0.),
+                linear_color_stop(gpui_kit::white().opacity(0.), 0.55),
+            )))
+            .child(content),
+    )
 }
+/// How much of a glass button its icon fills, and a launcher glyph (tight-cropped, so a touch less).
+const ICON_FILL: f32 = 0.54;
+/// How much a glass button grows when hovered.
+const GLASS_GROW: f32 = 6.;
+const GLYPH_FILL: f32 = 0.5;
+
 /// Glyph ink: white on dark glass, near-black on light glass (as the buttons' icons).
 const GLYPH_ON_DARK: [u8; 3] = [255, 255, 255];
 const GLYPH_ON_LIGHT: [u8; 3] = [40, 40, 40];
