@@ -436,12 +436,22 @@ impl MulchApp {
         cx.notify();
     }
 
-    /// Glass buttons over a hovered poster: Play (larger, in the middle),
-    /// Show in its launcher, Show in folder, and for games the user added,
-    /// Remove (which asks again first).
-    fn poster_actions(&self, game: &Game, cx: &mut Context<Self>) -> Div {
-        // Play in the middle; the others split evenly either side of it.
-        let mut buttons: Vec<AnyElement> = Vec::new();
+    /// Glass buttons over a hovered poster: Play follows the cursor (staying
+    /// clear of the bottom row); along the bottom, Show in folder on the left
+    /// and the game's other action on the right: Show in its launcher, or for
+    /// games the user added, Remove (which asks again first).
+    fn poster_actions(&self, game: &Game, size: (f32, f32), cursor: (f32, f32), cx: &mut Context<Self>) -> Div {
+        let mut left: Option<AnyElement> = None;
+        let mut right: Option<AnyElement> = None;
+        if let Some(dir) = game.install_dir.clone() {
+            let button = glass_button("show-folder", IconName::FolderOpen, GLASS_BUTTON, false).on_click(cx.listener(
+                move |app, _, _, cx| {
+                    app.action_clicked = true;
+                    cx.open_with_system(&dir);
+                },
+            ));
+            left = Some(with_tooltip(button, "Show in folder").into_any_element());
+        }
         if let Some(show) = game.show_in_launcher.clone() {
             let launcher = match game.platform {
                 Platform::Xbox => "Microsoft Store",
@@ -455,26 +465,8 @@ impl MulchApp {
                     run_action(&show, &name, window, cx);
                 }),
             );
-            buttons.push(with_tooltip(button, format!("Show in {launcher}")).into_any_element());
-        }
-        let g = game.clone();
-        let play = glass_button("play", IconName::Play, GLASS_PLAY_BUTTON, false).on_click(cx.listener(
-            move |app, _, window, cx| {
-                app.action_clicked = true;
-                app.play(&g, window, cx);
-            },
-        ));
-        let play = with_tooltip(play, "Play");
-        if let Some(dir) = game.install_dir.clone() {
-            let button = glass_button("show-folder", IconName::FolderOpen, GLASS_BUTTON, false).on_click(cx.listener(
-                move |app, _, _, cx| {
-                    app.action_clicked = true;
-                    cx.open_with_system(&dir);
-                },
-            ));
-            buttons.push(with_tooltip(button, "Show in folder").into_any_element());
-        }
-        if let (Platform::Manual, Action::Exe { path, .. }) = (game.platform, &game.launch) {
+            right = Some(with_tooltip(button, format!("Show in {launcher}")).into_any_element());
+        } else if let (Platform::Manual, Action::Exe { path, .. }) = (game.platform, &game.launch) {
             let exe = path.clone();
             let id = game.id.clone();
             let confirming = self.confirm_remove.as_deref() == Some(game.id.as_str());
@@ -491,22 +483,35 @@ impl MulchApp {
                 },
             ));
             let tip = if confirming { "Click again to remove" } else { "Remove" };
-            buttons.push(with_tooltip(button, tip).into_any_element());
+            right = Some(with_tooltip(button, tip).into_any_element());
         }
-        let right = buttons.split_off(buttons.len().div_ceil(2));
-        let side = || h_flex().flex_1().items_center().gap(px(GLASS_GAP));
-        h_flex()
-            .absolute()
-            .left_0()
-            .bottom(px(GLASS_INSET))
-            .w_full()
-            .items_center()
-            .gap(px(GLASS_GAP))
-            .child(side().justify_end().children(buttons))
-            .child(play)
-            .child(side().justify_start().children(right))
-    }
 
+        // Play sits under the cursor, kept inside the poster and above the bottom row.
+        let (width, height) = size;
+        let half = GLASS_PLAY_BUTTON / 2.;
+        let lowest = height - GLASS_INSET - GLASS_BUTTON - GLASS_GAP - half;
+        let x = cursor.0.clamp(GLASS_INSET + half, width - GLASS_INSET - half);
+        let y = cursor.1.clamp(GLASS_INSET + half, lowest.max(GLASS_INSET + half));
+        let g = game.clone();
+        let play = glass_button("play", IconName::Play, GLASS_PLAY_BUTTON, false).on_click(cx.listener(
+            move |app, _, window, cx| {
+                app.action_clicked = true;
+                app.play(&g, window, cx);
+            },
+        ));
+        let play = with_tooltip(play, "Play").absolute().left(px(x - half)).top(px(y - half));
+
+        div().absolute().top_0().left_0().size_full().child(play).child(
+            h_flex()
+                .absolute()
+                .left(px(GLASS_INSET))
+                .right(px(GLASS_INSET))
+                .bottom(px(GLASS_INSET))
+                .justify_between()
+                .child(left.unwrap_or_else(|| div().into_any_element()))
+                .child(right.unwrap_or_else(|| div().into_any_element())),
+        )
+    }
     fn apply_art(&mut self, games: Vec<Game>, launchers: Vec<Launcher>, cx: &mut Context<Self>) {
         // Icons may have been added or replaced with trimmed copies.
         let game_art: HashMap<String, Art> = games.into_iter().filter_map(|g| Some((g.id, g.art?))).collect();
@@ -983,7 +988,9 @@ impl MulchApp {
         let clicked = game.clone();
         let lift = Tween::value(&self.lifts, &game.id);
         // Glass buttons fade in over the poster while it's hovered.
-        let actions = (lift > 0.).then(|| self.poster_actions(game, cx).opacity(lift));
+        let (dx, dy) = if self.hovered_tile == Some(ix) { self.tilt } else { (0., 0.) };
+        let cursor = ((dx + 1.) / 2. * width, (dy + 1.) / 2. * height);
+        let actions = (lift > 0.).then(|| self.poster_actions(game, (width, height), cursor, cx).opacity(lift));
         let theme = cx.theme();
         let poster = div()
             .absolute()
