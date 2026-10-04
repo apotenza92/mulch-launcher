@@ -495,8 +495,8 @@ impl MulchApp {
 
         // Play, big, in the middle of the space above the bottom row.
         let (width, height) = size;
-        let half = (GLASS_PLAY_BUTTON + GLASS_GROW) / 2.;
-        let row = GLASS_INSET + GLASS_BUTTON + GLASS_GROW;
+        let half = (GLASS_PLAY_BUTTON + GLASS_PRESS_GROW) / 2.;
+        let row = GLASS_INSET + GLASS_BUTTON + GLASS_PRESS_GROW;
         let (x, y) = (width / 2., (height - row) / 2.);
         let g = game.clone();
         let play = glass_button("play", IconName::Play, GLASS_PLAY_BUTTON, false, dark).on_click(cx.listener(
@@ -1042,7 +1042,6 @@ impl MulchApp {
                     })
                     // A soft sheen on the side the mouse is on.
                     .when(hovered, |frame| frame.child(sheen(dx, dy)))
-                    .children(actions)
                     // Lifts, leans toward the mouse, and casts its shadow away from it.
                     .left(px(TILT_SHIFT * dx * lift))
                     .top(px((-LIFT + TILT_SHIFT * dy) * lift))
@@ -1054,6 +1053,20 @@ impl MulchApp {
                         inset: false,
                     }]),
             )
+            // The buttons float on their own plane above the poster: not clipped
+            // to its edges, and shifting further than it with the tilt.
+            .children(actions.map(|actions| {
+                deferred(
+                    div()
+                        .absolute()
+                        .left(px(TILT_SHIFT * BUTTON_PARALLAX * dx * lift))
+                        .top(px((-LIFT + TILT_SHIFT * BUTTON_PARALLAX * dy) * lift))
+                        .w(px(width))
+                        .h(px(height))
+                        .child(actions),
+                )
+                .with_priority(1)
+            }))
             .child({
                 // One line, cut short with "…"; while hovered, a name that's cut
                 // short slides along to show the rest, and back.
@@ -1413,12 +1426,12 @@ fn glass_button_with(id: &'static str, content: AnyElement, size: f32, danger: b
     } else {
         (glass.opacity(0.7), glass.opacity(0.95), ink, gpui_kit::white().opacity(0.9))
     };
-    // Hovered, it grows a little, brightens and glows; the slot it sits in
-    // stays the same size, so nothing around it moves.
+    // The slot it sits in stays the grown size, so nothing around it moves.
     let grown = size + GLASS_GROW;
     let group: SharedString = format!("glass-{id}").into();
-    div().id(id).group(group.clone()).size(px(grown)).flex().items_center().justify_center().child(
+    div().id(id).group(group.clone()).size(px(size + GLASS_PRESS_GROW)).flex().items_center().justify_center().child(
         div()
+            .id("dome")
             .relative()
             .size(px(size))
             .flex()
@@ -1428,16 +1441,21 @@ fn glass_button_with(id: &'static str, content: AnyElement, size: f32, danger: b
             .bg(fill)
             .border_1()
             .border_color(edge)
-            .shadow_md()
+            .shadow(bevel(0, glow))
             .text_color(ink)
-            .group_hover(group, move |style| {
-                style.size(px(grown)).bg(hover).border_color(gpui_kit::white().opacity(0.7)).shadow(vec![BoxShadow {
-                    color: glow,
-                    offset: point(px(0.), px(0.)),
-                    blur_radius: px(18.),
-                    spread_radius: px(1.),
-                    inset: false,
-                }])
+            // Hovered: it rises off the poster onto its own plane, grows,
+            // brightens and glows, its bevel and shadow deepening.
+            .group_hover(group.clone(), move |style| {
+                style
+                    .size(px(grown))
+                    .top(px(-GLASS_LIFT))
+                    .bg(hover)
+                    .border_color(gpui_kit::white().opacity(0.75))
+                    .shadow(bevel(1, glow))
+            })
+            // Pressed: higher still.
+            .group_active(group, move |style| {
+                style.size(px(size + GLASS_PRESS_GROW)).top(px(-GLASS_PRESS_LIFT)).shadow(bevel(2, glow))
             })
             // Glassy: light catching the top of the dome.
             .child(div().absolute().top_0().left_0().size_full().rounded_full().bg(linear_gradient(
@@ -1451,13 +1469,49 @@ fn glass_button_with(id: &'static str, content: AnyElement, size: f32, danger: b
 /// How much of a glass button its icon fills, and a launcher glyph (tight-cropped, so a touch less).
 const ICON_FILL: f32 = 0.54;
 /// How much a glass button grows when hovered.
-const GLASS_GROW: f32 = 6.;
+const GLASS_GROW: f32 = 12.;
+/// How far a hovered glass button rises.
+const GLASS_LIFT: f32 = 6.;
+/// Pressed, it rises further still.
+const GLASS_PRESS_LIFT: f32 = 12.;
+const GLASS_PRESS_GROW: f32 = 18.;
+/// The buttons' layer moves this much more than the poster as it tilts (parallax).
+const BUTTON_PARALLAX: f32 = 2.5;
 const GLYPH_FILL: f32 = 0.5;
 
 /// Glyph ink: white on dark glass, near-black on light glass (as the buttons' icons).
 const GLYPH_ON_DARK: [u8; 3] = [255, 255, 255];
 const GLYPH_ON_LIGHT: [u8; 3] = [40, 40, 40];
 
+/// A glass button's shadows by height: 0 floating just above the poster,
+/// 1 hovered (higher), 2 pressed (higher still). Each has a domed bevel
+/// (bright top edge, darker bottom) and a drop shadow that falls further
+/// and softer the higher it is, plus a glow once raised.
+fn bevel(level: u8, glow: Hsla) -> Vec<BoxShadow> {
+    let shadow = |color: Hsla, y: f32, blur: f32, spread: f32, inset: bool| BoxShadow {
+        color,
+        offset: point(px(0.), px(y)),
+        blur_radius: px(blur),
+        spread_radius: px(spread),
+        inset,
+    };
+    let (light, dark) = (gpui_kit::white(), gpui_kit::black());
+    let (far, near, top, bottom) = match level {
+        0 => ((8., 14., 0.4), (2., 4., 0.25), 0.4, 0.18),
+        1 => ((16., 24., 0.5), (5., 8., 0.3), 0.6, 0.28),
+        _ => ((26., 34., 0.55), (8., 12., 0.3), 0.7, 0.32),
+    };
+    let mut shadows = vec![
+        shadow(dark.opacity(far.2), far.0, far.1, -2., false),
+        shadow(dark.opacity(near.2), near.0, near.1, 0., false),
+        shadow(light.opacity(top), 2., 1., 0., true),
+        shadow(dark.opacity(bottom), -3., 4., 0., true),
+    ];
+    if level > 0 {
+        shadows.push(shadow(glow, 0., 22., 1., false));
+    }
+    shadows
+}
 /// Adds a quick tooltip (after `TOOLTIP_DELAY`).
 fn with_tooltip(element: Stateful<Div>, text: impl Into<SharedString>) -> Stateful<Div> {
     let text: SharedString = text.into();
