@@ -4,6 +4,6 @@
 
 <p align="center">One launcher for all your games.</p>
 
-<p align="center"><a href="https://apotenza92.github.io/mulch-launcher/">Download</a></p>
+<p align="center"><a href="https://apotenza92.github.io/mulch-launcher/">Download</a> · Windows only, for now</p>
 
 ![The library](docs/screenshots/library.png)
