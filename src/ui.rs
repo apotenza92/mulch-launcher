@@ -258,6 +258,8 @@ struct MulchApp {
     lifts: HashMap<String, Tween>,
     /// Games being removed, fading out before they go.
     leaving: HashMap<String, Tween>,
+    /// Each launcher's icon as a one-colour glyph (light ink, dark ink), for poster buttons.
+    glyphs: HashMap<Platform, (PathBuf, PathBuf)>,
     /// Each poster's accent colour, for tinting its glow.
     accents: HashMap<PathBuf, Hsla>,
     /// A theme change in progress: the colours it's blending from and to.
@@ -302,6 +304,7 @@ impl MulchApp {
             lifts: HashMap::new(),
             leaving: HashMap::new(),
             accents: HashMap::new(),
+            glyphs: HashMap::new(),
             theme_fade: None,
             first_shown: None,
             action_clicked: false,
@@ -460,12 +463,20 @@ impl MulchApp {
                 other => other.label(),
             };
             let name = game.name.clone();
-            let button = glass_button("show-launcher", IconName::ExternalLink, GLASS_BUTTON, false, dark).on_click(
-                cx.listener(move |app, _, window, cx| {
+            // The launcher's own logo, as a glyph in the button's ink.
+            let content = match self.glyphs.get(&game.platform) {
+                Some((on_dark, on_light)) => img(if dark { on_dark.clone() } else { on_light.clone() })
+                    .size(px(GLASS_BUTTON * 0.5))
+                    .object_fit(ObjectFit::Contain)
+                    .into_any_element(),
+                None => Icon::new(IconName::ExternalLink).size(px(GLASS_BUTTON * 0.42)).into_any_element(),
+            };
+            let button = glass_button_with("show-launcher", content, GLASS_BUTTON, false, dark).on_click(cx.listener(
+                move |app, _, window, cx| {
                     app.action_clicked = true;
                     run_action(&show, &name, window, cx);
-                }),
-            );
+                },
+            ));
             right = Some(with_tooltip(button, format!("Show in {launcher}")).into_any_element());
         } else if let (Platform::Manual, Action::Exe { path, .. }) = (game.platform, &game.launch) {
             let exe = path.clone();
@@ -529,7 +540,39 @@ impl MulchApp {
             }
         }
         self.find_accents(cx);
+        self.make_glyphs(cx);
         cx.notify();
+    }
+
+    /// Makes one-colour glyphs of the launchers' icons, in the background.
+    fn make_glyphs(&mut self, cx: &mut Context<Self>) {
+        let wanted: Vec<(Platform, PathBuf)> = self
+            .launchers
+            .iter()
+            .filter_map(|l| Some((l.platform?, l.icon.clone()?)))
+            .filter(|(platform, _)| !self.glyphs.contains_key(platform))
+            .collect();
+        if wanted.is_empty() {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let made = cx
+                .background_spawn(async move {
+                    wanted
+                        .into_iter()
+                        .filter_map(|(platform, icon)| {
+                            Some((platform, (art::glyph(&icon, GLYPH_ON_DARK)?, art::glyph(&icon, GLYPH_ON_LIGHT)?)))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            this.update(cx, |app, cx| {
+                app.glyphs.extend(made);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Works out the accent colour of posters that don't have one yet, in the background.
@@ -1462,6 +1505,11 @@ fn text_width(text: &str, window: &Window, cx: &App) -> f32 {
 /// with a dark icon in light mode, dark glass with a white icon in dark mode.
 /// `danger` tints it red (a remove waiting to be confirmed).
 fn glass_button(id: &'static str, icon: IconName, size: f32, danger: bool, dark: bool) -> Stateful<Div> {
+    glass_button_with(id, Icon::new(icon).size(px(size * 0.42)).into_any_element(), size, danger, dark)
+}
+
+/// A glass button around any content (e.g. a launcher's glyph).
+fn glass_button_with(id: &'static str, content: AnyElement, size: f32, danger: bool, dark: bool) -> Stateful<Div> {
     let (glass, ink, edge) = if dark {
         (gpui_kit::black(), gpui_kit::white(), gpui_kit::white().opacity(0.35))
     } else {
@@ -1487,8 +1535,12 @@ fn glass_button(id: &'static str, icon: IconName, size: f32, danger: bool, dark:
         .shadow_md()
         .text_color(ink)
         .hover(move |style| style.bg(hover))
-        .child(Icon::new(icon).size(px(size * 0.42)))
+        .child(content)
 }
+/// Glyph ink: white on dark glass, near-black on light glass (as the buttons' icons).
+const GLYPH_ON_DARK: [u8; 3] = [255, 255, 255];
+const GLYPH_ON_LIGHT: [u8; 3] = [40, 40, 40];
+
 /// Adds a quick tooltip (after `TOOLTIP_DELAY`).
 fn with_tooltip(element: Stateful<Div>, text: impl Into<SharedString>) -> Stateful<Div> {
     let text: SharedString = text.into();

@@ -3,7 +3,9 @@
 //! as a PNG so it only costs time once per game.
 
 mod accent;
+mod glyph;
 pub use accent::accent;
+pub use glyph::glyph;
 use mulch_core::{Art, Game, Launcher};
 use std::collections::hash_map::DefaultHasher;
 use std::ffi::c_void;

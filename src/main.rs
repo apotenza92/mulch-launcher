@@ -12,6 +12,23 @@ fn main() {
         print_scan();
         return;
     }
+    // Development aid: write every launcher's glyph into a folder.
+    if let Some(ix) = std::env::args().position(|a| a == "--glyphs") {
+        let dir = std::env::args().nth(ix + 1).unwrap_or_else(|| ".".into());
+        let mut launchers = scan::scan_all(&[]).launchers;
+        mulch_art::fill_launchers(&mut launchers);
+        for l in &launchers {
+            if let Some(icon) = &l.icon {
+                for (ink, tag) in [([255, 255, 255], "white"), ([30, 30, 30], "dark")] {
+                    if let Some(g) = mulch_art::glyph(icon, ink) {
+                        let _ = std::fs::copy(&g, format!("{dir}/{}-{tag}.png", l.name));
+                    }
+                }
+                let _ = std::fs::copy(icon, format!("{dir}/{}-icon.png", l.name));
+            }
+        }
+        return;
+    }
     if has("--discover") {
         print_discover();
         return;
