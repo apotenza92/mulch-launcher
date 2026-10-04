@@ -1,4 +1,4 @@
-//! The few things Mulch remembers, in `%APPDATA%\MulchLauncher\settings.json`.
+//! The few things Mulch remembers, in `data\settings.json` next to MulchLauncher.exe.
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -7,18 +7,12 @@ use std::path::PathBuf;
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// Whether first-run setup has been completed.
-    pub setup_done: bool,
     /// Chosen tile size (an index into `layout::TILE_SIZES`); the middle one if unset.
     pub tile_size: Option<usize>,
 }
 
-pub fn data_dir() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("MulchLauncher"))
-}
-
 fn path() -> Option<PathBuf> {
-    data_dir().map(|d| d.join("settings.json"))
+    mulch_core::paths::data_dir().map(|d| d.join("settings.json"))
 }
 
 impl Settings {

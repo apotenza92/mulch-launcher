@@ -129,7 +129,7 @@ fn trim_transparent(width: u32, height: u32, rgba: &[u8]) -> (u32, u32, Vec<u8>)
 }
 
 fn cache_dir() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join(r"MulchLauncher\icons"))
+    mulch_core::paths::cache_dir("icons")
 }
 
 /// The cached PNG for an executable's (or .ico's) icon, extracting it on first use.

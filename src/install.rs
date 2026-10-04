@@ -1,12 +1,23 @@
-//! Per-user self-install: no installer, no admin rights. The downloaded
-//! `MulchLauncher.exe` copies itself to `%LOCALAPPDATA%\Programs\MulchLauncher`,
-//! adds a Start menu shortcut and an "Installed apps" entry (so it uninstalls
-//! like any other app), then relaunches from there.
+//! Per-user install with no installer and no admin rights. Run from anywhere
+//! (e.g. Downloads), `MulchLauncher.exe` silently copies itself to
+//! `%LOCALAPPDATA%\Programs\MulchLauncher`, adds a Start menu shortcut and an
+//! "Installed apps" entry, then relaunches from there.
+//!
+//! Everything MulchLauncher saves lives in that folder (see
+//! `mulch_core::paths`), so uninstalling removes, in full:
+//! - the install folder (program, settings, play history, caches),
+//! - the Start menu shortcut, and a taskbar pin if the user made one,
+//! - the "Installed apps" entry,
+//! - folders older versions used in `%APPDATA%` and `%LOCALAPPDATA%`.
+//!
+//! Windows itself keeps a few anonymous notes about every program ever run
+//! (jump lists, the recently-run cache); those belong to Windows, not to us.
 
 use std::env;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::os::windows::process::CommandExt;
 use std::process::Command;
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, IPersistFile,
@@ -18,6 +29,8 @@ use winreg::enums::HKEY_CURRENT_USER;
 
 pub const APP_NAME: &str = "MulchLauncher";
 const EXE_NAME: &str = "MulchLauncher.exe";
+/// Run helper commands without a console window flashing up.
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\MulchLauncher";
 
 pub fn install_dir() -> Option<PathBuf> {
@@ -29,13 +42,27 @@ fn start_menu_shortcut() -> Option<PathBuf> {
         .map(|p| PathBuf::from(p).join(r"Microsoft\Windows\Start Menu\Programs").join(format!("{APP_NAME}.lnk")))
 }
 
+/// Where Windows keeps a taskbar pin the user made (named after the shortcut).
+fn taskbar_pin() -> Option<PathBuf> {
+    env::var_os("APPDATA").map(|p| {
+        PathBuf::from(p)
+            .join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar")
+            .join(format!("{APP_NAME}.lnk"))
+    })
+}
+
+/// Folders older versions saved data in, outside the install folder.
+fn legacy_data_dirs() -> Vec<PathBuf> {
+    ["APPDATA", "LOCALAPPDATA"].iter().filter_map(|var| env::var_os(var)).map(|p| PathBuf::from(p).join(APP_NAME)).collect()
+}
+
 /// Whether this process is the installed copy.
 pub fn is_installed_copy() -> bool {
     let (Ok(exe), Some(dir)) = (env::current_exe(), install_dir()) else { return false };
     exe.parent().is_some_and(|parent| same_path(parent, &dir))
 }
 
-/// Development builds run from Cargo's `target` folder and never self-install.
+/// Development builds run from Cargo's `target` folder and never install.
 pub fn is_dev_build() -> bool {
     env::current_exe()
         .map(|exe| exe.components().any(|c| c.as_os_str().eq_ignore_ascii_case("target")))
@@ -55,7 +82,7 @@ pub fn install() -> io::Result<PathBuf> {
     if !same_path(&current, &installed) {
         fs::copy(&current, &installed)?;
     }
-
+    adopt_legacy_data(&dir.join("data"), true);
     if let Some(shortcut) = start_menu_shortcut() {
         create_shortcut(&installed, &shortcut)?;
     }
@@ -63,9 +90,48 @@ pub fn install() -> io::Result<PathBuf> {
     Ok(installed)
 }
 
-/// Starts the installed copy (with extra arguments) so this one can exit.
-pub fn relaunch(installed: &Path, args: &[&str]) -> io::Result<()> {
-    Command::new(installed).args(args).current_dir(installed.parent().unwrap_or(Path::new("."))).spawn().map(|_| ())
+/// Moves (or for development builds, copies) data that older versions kept in
+/// `%APPDATA%` / `%LOCALAPPDATA%` into `data`, so nothing is lost and, once
+/// moved, nothing is left behind there. Caches go into `data\cache`.
+pub fn adopt_legacy_data(data: &Path, move_it: bool) {
+    for legacy in legacy_data_dirs() {
+        let Ok(entries) = fs::read_dir(&legacy) else { continue };
+        for entry in entries.filter_map(Result::ok) {
+            let name = entry.file_name();
+            let is_cache = matches!(name.to_str(), Some("posters" | "icons"));
+            let target = if is_cache { data.join("cache").join(&name) } else { data.join(&name) };
+            if target.exists() {
+                continue;
+            }
+            if let Some(parent) = target.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            let moved = move_it && fs::rename(entry.path(), &target).is_ok();
+            if !moved {
+                let _ = copy_recursive(&entry.path(), &target);
+            }
+        }
+        if move_it {
+            remove_dir_with_retry(&legacy);
+        }
+    }
+}
+
+fn copy_recursive(from: &Path, to: &Path) -> io::Result<()> {
+    if from.is_dir() {
+        fs::create_dir_all(to)?;
+        for entry in fs::read_dir(from)?.filter_map(Result::ok) {
+            copy_recursive(&entry.path(), &to.join(entry.file_name()))?;
+        }
+        Ok(())
+    } else {
+        fs::copy(from, to).map(|_| ())
+    }
+}
+
+/// Starts the installed copy so this one can exit.
+pub fn relaunch(installed: &Path) -> io::Result<()> {
+    Command::new(installed).current_dir(installed.parent().unwrap_or(Path::new("."))).spawn().map(|_| ())
 }
 
 fn create_shortcut(target: &Path, shortcut: &Path) -> io::Result<()> {
@@ -103,31 +169,61 @@ fn register_uninstall_entry(installed: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Removes the shortcut, the Installed apps entry, settings and the program
-/// itself. The running exe can't delete itself, so a short-lived `cmd`
-/// removes the folder once this process has exited.
+/// Removes everything listed at the top of this file. Any other open copy of
+/// MulchLauncher is closed first. The running exe can't delete its own
+/// folder, so a short-lived `cmd` removes it once this process has exited,
+/// retrying while Windows still holds the files.
 pub fn uninstall() -> io::Result<()> {
-    if let Some(shortcut) = start_menu_shortcut() {
-        let _ = fs::remove_file(shortcut);
+    let _ = Command::new("taskkill")
+        .args(["/F", "/IM", EXE_NAME, "/FI"])
+        .arg(format!("PID ne {}", std::process::id()))
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+    for file in [start_menu_shortcut(), taskbar_pin()].into_iter().flatten() {
+        let _ = fs::remove_file(file);
     }
     let _ = RegKey::predef(HKEY_CURRENT_USER).delete_subkey_all(UNINSTALL_KEY);
-    if let Some(data) = crate::settings::data_dir() {
-        remove_dir_with_retry(&data);
+    if let Some(dir) = install_dir() {
+        forget_in_windows_caches(&dir.join(EXE_NAME));
     }
-    if let Some(cache) = env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join(APP_NAME)) {
-        remove_dir_with_retry(&cache);
+    for legacy in legacy_data_dirs() {
+        remove_dir_with_retry(&legacy);
     }
     if let Some(dir) = install_dir() {
-        // `ping` is the classic console-free delay (`timeout` needs a console).
-        Command::new("cmd")
-            .args(["/C", "ping", "-n", "3", "127.0.0.1", ">NUL", "&", "rmdir", "/S", "/Q"])
-            .arg(&dir)
-            .spawn()?;
+        let dir = dir.display().to_string();
+        // `ping` is the console-free delay (`timeout` needs a console).
+        let script = format!(
+            "for /L %i in (1,1,15) do @(if exist \"{dir}\" (ping -n 2 127.0.0.1 >NUL & rmdir /S /Q \"{dir}\"))"
+        );
+        // Passed verbatim: cmd doesn't understand Rust's argument quoting.
+        Command::new("cmd").raw_arg(format!("/D /S /C \"{script}\"")).creation_flags(CREATE_NO_WINDOW).spawn()?;
     }
     Ok(())
 }
 
-/// Deletes a folder, retrying briefly: right after the app closes, Windows
+/// Removes the notes Windows keeps on any program that has run (its display
+/// name, and the compatibility assistant's record) for the installed exe.
+/// Windows recreates these for any program it runs, so removing them is safe.
+fn forget_in_windows_caches(exe: &Path) {
+    let exe = exe.display().to_string().to_lowercase();
+    let caches = [
+        r"Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache",
+        r"Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Compatibility Assistant\Store",
+    ];
+    for cache in caches {
+        let Ok(key) = RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags(cache, winreg::enums::KEY_ALL_ACCESS)
+        else {
+            continue;
+        };
+        let ours: Vec<String> =
+            key.enum_values().filter_map(Result::ok).map(|(name, _)| name).filter(|n| n.to_lowercase().starts_with(&exe)).collect();
+        for name in ours {
+            let _ = key.delete_value(name);
+        }
+    }
+}
+
+/// Deletes a folder, retrying briefly: right after an app closes, Windows
 /// can still be holding its files open for a moment.
 fn remove_dir_with_retry(dir: &Path) {
     for _ in 0..10 {
@@ -136,54 +232,4 @@ fn remove_dir_with_retry(dir: &Path) {
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
-}
-
-/// Launchers the user has pinned to the taskbar (pinned shortcuts live in a
-/// known folder). Used to suggest unpinning them, since Mulch has buttons for
-/// them; Windows offers no supported way for an app to unpin others.
-pub fn pinned_launchers(launcher_names: &[&str]) -> Vec<String> {
-    let Some(folder) = env::var_os("APPDATA")
-        .map(|p| PathBuf::from(p).join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"))
-    else {
-        return Vec::new();
-    };
-    let Ok(entries) = fs::read_dir(folder) else { return Vec::new() };
-    let pinned: Vec<String> = entries
-        .filter_map(Result::ok)
-        .map(|e| e.file_name().to_string_lossy().to_lowercase())
-        .filter(|name| name.ends_with(".lnk"))
-        .collect();
-
-    launcher_names
-        .iter()
-        .filter(|name| {
-            let key = pin_keyword(name);
-            pinned.iter().any(|file| file.contains(&key))
-        })
-        .map(|name| name.to_string())
-        .collect()
-}
-
-/// The word a launcher's taskbar shortcut name is likely to contain.
-fn pin_keyword(launcher: &str) -> String {
-    match launcher {
-        "EA app" => "ea app".into(),
-        "Epic Games" => "epic games".into(),
-        "Ubisoft Connect" => "ubisoft".into(),
-        "Rockstar Games" => "rockstar".into(),
-        "GOG Galaxy" => "gog".into(),
-        other => other.to_lowercase(),
-    }
-}
-
-/// Asks Windows to pin this app to the taskbar. Windows shows its own
-/// confirmation. Unpackaged apps need Microsoft-issued access for this, so it
-/// usually reports `false` and the app tells the user how to pin by hand.
-pub fn request_taskbar_pin() -> bool {
-    use windows::UI::Shell::TaskbarManager;
-    let Ok(manager) = TaskbarManager::GetDefault() else { return false };
-    if !manager.IsSupported().unwrap_or(false) || !manager.IsPinningAllowed().unwrap_or(false) {
-        return false;
-    }
-    manager.RequestPinCurrentAppAsync().and_then(|op| op.get()).unwrap_or(false)
 }

@@ -52,7 +52,7 @@ Posters are always shown whole, never cropped or stretched.
   for Ubisoft, Ubisoft's own thumbnail if the game isn't on Steam.
 - Otherwise the game's icon.
 
-Fetched posters are cached in `%LOCALAPPDATA%\MulchLauncher\posters`; games
+Fetched posters are cached in `data\cache\posters` in the install folder; games
 with no poster anywhere are only re-checked weekly. No logins or API keys.
 
 ## Sort order and play history
@@ -65,7 +65,7 @@ started it; and MulchLauncher's own tracking for everything else (starting a
 game from MulchLauncher, or any of the game's programs running from its
 folder, checked every 30 seconds while MulchLauncher is open). The
 grid groups games played in the last week, the last month, and everything
-else. Stored in `%APPDATA%\MulchLauncher\history.json`.
+else. Stored in `data\history.json` in the install folder.
 Hours played aren't shown: most launchers keep them only in your online
 account.
 
@@ -80,7 +80,7 @@ One crate per job, each buildable and testable on its own:
 | `crates/art` | Icons from executables and package logos |
 | `crates/posters` | Online poster lookups |
 | `crates/history` | MulchLauncher's own last-played tracking |
-| the root package | The app: window, setup/install, settings, grid sizing |
+| the root package | The app: window, install/uninstall, settings, grid layout |
 
 Adding a launcher means adding a crate that implements `Library` and listing
 it in `src/scan.rs`. `MulchLauncher --scan steam` scans one library on its own.
@@ -95,11 +95,18 @@ it in `src/scan.rs`. `MulchLauncher --scan steam` scans one library on its own.
 
 ## Install
 
-Run `MulchLauncher.exe` from anywhere (e.g. Downloads). First-run setup shows
-what it found, offers to add other games, and an optional taskbar pin, then
-installs itself per-user (no admin) to `%LOCALAPPDATA%\Programs\MulchLauncher`
-with a Start menu shortcut and an "Installed apps" entry. Uninstall from
-Windows Settings like any other app.
+Run `MulchLauncher.exe` from anywhere (e.g. Downloads). With no questions or
+setup screens, it installs itself per-user (no admin) to
+`%LOCALAPPDATA%\Programs\MulchLauncher` with a Start menu shortcut and an
+"Installed apps" entry, then opens. (Windows doesn't let apps pin themselves
+to the taskbar; right-click it to pin.)
+
+Everything it saves lives in that folder's `data` subfolder: settings, play
+history, games added by hand, and cached posters and icons. Uninstalling from
+Windows Settings removes, in full: the folder, the Start menu shortcut, a
+taskbar pin if you made one, the Installed apps entry, Windows' own cache
+entries for the program, and folders older versions used in AppData. Nothing
+is left behind.
 
 ## Roadmap
 

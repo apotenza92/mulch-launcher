@@ -9,6 +9,7 @@
 //! folder are found. Default paths are only ever a last-resort fallback.
 
 pub mod exe_info;
+pub mod paths;
 pub mod registry;
 
 use registry::UninstallEntry;

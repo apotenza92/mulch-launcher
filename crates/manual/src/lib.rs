@@ -1,5 +1,5 @@
 //! Games the user added by pointing at an executable. Stored as JSON in
-//! `%APPDATA%\MulchLauncher\manual-games.json`.
+//! `data\manual-games.json` next to MulchLauncher.exe.
 
 use mulch_core::{Action, Game, Launcher, Library, Platform, ScanContext};
 use serde::{Deserialize, Serialize};
@@ -16,7 +16,7 @@ pub struct ManualGame {
 }
 
 fn store_path() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("MulchLauncher").join("manual-games.json"))
+    mulch_core::paths::data_dir().map(|d| d.join("manual-games.json"))
 }
 
 pub fn load() -> Vec<ManualGame> {
@@ -27,7 +27,7 @@ pub fn load() -> Vec<ManualGame> {
 }
 
 fn save(games: &[ManualGame]) -> io::Result<()> {
-    let path = store_path().ok_or_else(|| io::Error::other("APPDATA is not set"))?;
+    let path = store_path().ok_or_else(|| io::Error::other("can't find MulchLauncher's folder"))?;
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }

@@ -33,7 +33,7 @@ const MAX_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
 const PARALLEL_FETCHES: usize = 6;
 
 fn cache_dir() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join(r"MulchLauncher\posters"))
+    mulch_core::paths::cache_dir("posters")
 }
 
 fn cache_key(game: &Game) -> String {

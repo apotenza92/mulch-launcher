@@ -17,13 +17,33 @@ fn main() {
     }
     // Run by Windows' "Installed apps" > Uninstall.
     if has("--uninstall") {
-        if let Err(err) = install::uninstall() {
-            eprintln!("Uninstall failed: {err}");
+        let _ = install::uninstall();
+        return;
+    }
+    // Run from anywhere else (e.g. Downloads): install silently, then hand
+    // over to the installed copy. Nothing is saved next to this copy.
+    if !install::is_dev_build() && !install::is_installed_copy() {
+        if let Err(err) = install::install().and_then(|installed| install::relaunch(&installed)) {
+            message_box(&format!("MulchLauncher couldn't install: {err}"));
         }
         return;
     }
-    // Passed by setup when the user asked to be pinned to the taskbar.
-    ui::run(has("--pin"));
+    // Development builds keep their own data in `target`; copy in the data
+    // older versions kept in AppData, leaving it there.
+    if install::is_dev_build() {
+        if let Some(data) = mulch_core::paths::data_dir() {
+            install::adopt_legacy_data(&data, false);
+        }
+    }
+    ui::run();
+}
+
+fn message_box(text: &str) {
+    use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+    use windows::core::HSTRING;
+    unsafe {
+        MessageBoxW(None, &HSTRING::from(text), &HSTRING::from("MulchLauncher"), MB_OK | MB_ICONERROR);
+    }
 }
 
 /// `MulchLauncher --scan`: prints everything found and how long it took.

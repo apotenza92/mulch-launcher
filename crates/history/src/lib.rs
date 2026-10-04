@@ -8,7 +8,7 @@
 //! A game counts as played when it's started from MulchLauncher, or whenever
 //! a running process's executable lives in one of the game's folders, which
 //! also catches games started from their own launcher while Mulch is open.
-//! Stored in `%APPDATA%\MulchLauncher\history.json`.
+//! Stored in `data\history.json` next to MulchLauncher.exe.
 
 use mulch_core::Game;
 use serde::{Deserialize, Serialize};
@@ -29,7 +29,7 @@ pub struct History {
 }
 
 fn path() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join(r"MulchLauncher\history.json"))
+    mulch_core::paths::data_dir().map(|d| d.join("history.json"))
 }
 
 pub fn now() -> u64 {

@@ -2,7 +2,6 @@
 //! the left, buttons on the right) and every detected game as a tile, grouped
 //! by when it was last played and sized so they all fit if they can.
 
-use mulch_launcher::install;
 use mulch_launcher::launch;
 use mulch_launcher::layout::{
     COVER_ASPECT, DEFAULT_SIZE, GRID_GAP, GridLayout, HEADING_HEIGHT, TILE_SIZES, grid_width, layout as grid_layout,
@@ -30,9 +29,7 @@ use std::path::PathBuf;
 
 const APP_NAME: &str = "MulchLauncher";
 
-/// `pin_requested`: the installed copy was started by setup with "pin to
-/// taskbar" ticked, so ask Windows to pin it.
-pub fn run(pin_requested: bool) {
+pub fn run() {
     gpui_kit::application().with_assets(gpui_kit::assets::Assets).run(move |cx| {
         gpui_kit::init(cx);
         Theme::change(ThemeMode::Dark, None, cx);
@@ -48,7 +45,7 @@ pub fn run(pin_requested: bool) {
             app_id: Some(APP_NAME.into()),
             ..Default::default()
         };
-        gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| MulchApp::new(pin_requested, window, cx)))
+        gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| MulchApp::new(window, cx)))
             .expect("failed to open the window");
     });
 }
@@ -69,13 +66,6 @@ struct MulchApp {
     scanning: bool,
     /// A game the user clicked, waiting for a second click on Play.
     pending_play: Option<PendingPlay>,
-    /// First-run setup, while it's showing.
-    setup: Option<SetupStep>,
-    pin_on_finish: bool,
-    /// Launchers pinned to the user's taskbar (setup suggests unpinning them).
-    pinned_launchers: Vec<String>,
-    /// Ask Windows to pin us on the next render (needs a live window).
-    pin_pending: bool,
     /// When each game was last played, for sorting most recent first.
     history: History,
     _subscriptions: Vec<Subscription>,
@@ -83,13 +73,6 @@ struct MulchApp {
 
 /// How often to look for running games (to record them as played).
 const PLAY_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
-
-#[derive(Clone, Copy, PartialEq)]
-enum SetupStep {
-    Welcome,
-    OtherGames,
-    Taskbar,
-}
 
 /// Programs on this PC that look like games, to add with a tick.
 struct AddPanel {
@@ -105,14 +88,9 @@ struct PendingPlay {
 }
 
 impl MulchApp {
-    fn new(pin_requested: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let settings = Settings::load();
-        let setup = (!settings.setup_done).then_some(SetupStep::Welcome);
         let mut app = Self {
-            setup,
-            pin_on_finish: false,
-            pinned_launchers: Vec::new(),
-            pin_pending: pin_requested,
             games: Vec::new(),
             launchers: Vec::new(),
             social: Vec::new(),
@@ -223,8 +201,6 @@ impl MulchApp {
         self.launchers = result.launchers;
         self.launchers.sort_by_key(|l| l.name.to_lowercase());
         self.social = result.social;
-        let names: Vec<&str> = self.launchers.iter().map(|l| l.name).collect();
-        self.pinned_launchers = install::pinned_launchers(&names);
         self.scanning = false;
         self.pending_play = None;
         cx.notify();
@@ -422,194 +398,6 @@ impl MulchApp {
         self.rescan(cx);
     }
 
-    fn set_setup_step(&mut self, step: SetupStep, cx: &mut Context<Self>) {
-        self.setup = Some(step);
-        cx.notify();
-    }
-
-    /// Ends first-run setup. A downloaded copy installs itself and hands over
-    /// to the installed copy; an installed or development copy just carries on.
-    fn finish_setup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.settings.setup_done = true;
-        self.settings.save();
-        self.setup = None;
-
-        if !install::is_dev_build() && !install::is_installed_copy() {
-            match install::install() {
-                Ok(installed) => {
-                    let args: &[&str] = if self.pin_on_finish { &["--pin"] } else { &[] };
-                    if install::relaunch(&installed, args).is_ok() {
-                        cx.quit();
-                        return;
-                    }
-                }
-                Err(err) => {
-                    window.push_notification(Notification::error(format!("Couldn't install MulchLauncher: {err}")), cx);
-                }
-            }
-        }
-        if self.pin_on_finish {
-            self.pin_pending = true;
-        }
-        cx.notify();
-    }
-
-    /// Asks Windows to pin the app; if Windows won't let it, says how to do it by hand.
-    fn pin_to_taskbar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.pin_pending = false;
-        if !install::request_taskbar_pin() {
-            window.push_notification(
-                Notification::info(
-                    "Windows only lets you pin apps yourself: right-click MulchLauncher in the taskbar and choose \
-                     \"Pin to taskbar\".",
-                )
-                .title("Pin to taskbar")
-                .autohide(false),
-                cx,
-            );
-        }
-    }
-
-    fn setup_panel(&self, step: SetupStep, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
-        let platforms: Vec<&str> = {
-            let mut names: Vec<&str> = self.games.iter().map(|g| g.platform.label()).collect();
-            names.sort_unstable();
-            names.dedup();
-            names
-        };
-        let installing = !install::is_dev_build() && !install::is_installed_copy();
-
-        let (title, body, actions): (&str, AnyElement, AnyElement) = match step {
-            SetupStep::Welcome => {
-                let summary = if self.scanning && self.games.is_empty() {
-                    "Looking for your games…".to_string()
-                } else if self.games.is_empty() {
-                    "No installed games found yet. Install one with any launcher and it will show up here.".to_string()
-                } else {
-                    format!(
-                        "Found {} game{} from {}. Nothing to set up: whenever MulchLauncher opens, it finds \
-                         what's installed, wherever it's installed.",
-                        self.games.len(),
-                        if self.games.len() == 1 { "" } else { "s" },
-                        platforms.join(", ")
-                    )
-                };
-                (
-                    "Welcome to MulchLauncher",
-                    div().text_sm().text_color(muted).child(summary).into_any_element(),
-                    Button::new("setup-next")
-                        .primary()
-                        .label("Next")
-                        .on_click(cx.listener(|app, _, _, cx| app.set_setup_step(SetupStep::OtherGames, cx)))
-                        .into_any_element(),
-                )
-            }
-            SetupStep::OtherGames => (
-                "Any other games?",
-                div()
-                    .text_sm()
-                    .text_color(muted)
-                    .child(
-                        "Games from anywhere else, like emulators, itch.io downloads or old installers, can be \
-                         added here. You can always do this later with Add game manually.",
-                    )
-                    .into_any_element(),
-                h_flex()
-                    .gap_2()
-                    .child(
-                        Button::new("setup-add")
-                            .outline()
-                            .icon(IconName::Plus)
-                            .label("Add games…")
-                            .on_click(cx.listener(|app, _, _, cx| app.open_add_panel(cx))),
-                    )
-                    .child(
-                        Button::new("setup-next")
-                            .primary()
-                            .label("Next")
-                            .on_click(cx.listener(|app, _, _, cx| app.set_setup_step(SetupStep::Taskbar, cx))),
-                    )
-                    .into_any_element(),
-            ),
-            SetupStep::Taskbar => {
-                let pinned_note = (!self.pinned_launchers.is_empty()).then(|| {
-                    div()
-                        .text_sm()
-                        .text_color(muted)
-                        .child(format!(
-                            "{} {} pinned to your taskbar. MulchLauncher has a button for each, so you could \
-                             unpin them: right-click each one in the taskbar and choose \"Unpin from taskbar\".",
-                            self.pinned_launchers.join(", "),
-                            if self.pinned_launchers.len() == 1 { "is" } else { "are" }
-                        ))
-                });
-                (
-                    "Taskbar",
-                    v_flex()
-                        .gap_3()
-                        .child(
-                            Checkbox::new("setup-pin")
-                                .checked(self.pin_on_finish)
-                                .label("Pin MulchLauncher to the taskbar")
-                                .on_click(cx.listener(|app, checked: &bool, _, cx| {
-                                    app.pin_on_finish = *checked;
-                                    cx.notify();
-                                })),
-                        )
-                        .children(pinned_note)
-                        .into_any_element(),
-                    Button::new("setup-finish")
-                        .primary()
-                        .label(if installing { "Install and finish" } else { "Finish" })
-                        .on_click(cx.listener(|app, _, window, cx| app.finish_setup(window, cx)))
-                        .into_any_element(),
-                )
-            }
-        };
-
-        let step_number = match step {
-            SetupStep::Welcome => 1,
-            SetupStep::OtherGames => 2,
-            SetupStep::Taskbar => 3,
-        };
-
-        deferred(
-            div()
-                .id("setup-backdrop")
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-                .occlude()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(theme.background.opacity(0.85))
-                .child(
-                    v_flex()
-                        .w(px(440.))
-                        .p_6()
-                        .gap_4()
-                        .rounded_lg()
-                        .bg(theme.popover)
-                        .border_1()
-                        .border_color(theme.border)
-                        .shadow_lg()
-                        .child(div().text_xs().text_color(muted).child(format!("Step {step_number} of 3")))
-                        .child(div().text_xl().font_semibold().child(title))
-                        .child(body)
-                        .child(h_flex().justify_end().child(actions)),
-                ),
-        )
-        .with_priority(3)
-        .into_any_element()
-    }
-
-    /// The slim bar at the very top: drag it to move the window, with the
-    /// app's name in the middle and the window controls on the right. Nothing
-    /// clickable lives here, since Windows treats it all as the window's caption.
     fn title_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         TitleBar::new()
@@ -1054,18 +842,12 @@ impl Render for MulchApp {
         let empty = !self.scanning && self.games.is_empty();
 
         let play_card = self.pending_play.as_ref().map(|pending| self.play_card(pending, cx));
-        let setup_panel = self.setup.map(|step| self.setup_panel(step, cx));
         let add_panel = self.add_panel.as_ref().map(|panel| self.add_panel(panel, cx));
-        if self.pin_pending {
-            self.pin_pending = false;
-            cx.defer_in(window, |app, window, cx| app.pin_to_taskbar(window, cx));
-        }
 
         v_flex()
             .relative()
             .size_full()
             .children(play_card)
-            .children(setup_panel)
             .children(add_panel)
             .child(title_bar)
             .child(toolbar)
