@@ -1,8 +1,8 @@
 // No console window for the app itself in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod assets;
-mod window_size;
 mod ui;
+mod window_size;
 
 use mulch_launcher::{install, scan};
 

@@ -155,9 +155,8 @@ fn extract_icon(source: &Path) -> Option<(u32, u32, Vec<u8>)> {
     unsafe {
         let factory: IShellItemImageFactory =
             SHCreateItemFromParsingName(&HSTRING::from(source.as_os_str()), None).ok()?;
-        let bitmap = factory
-            .GetImage(SIZE { cx: ICON_SIZE, cy: ICON_SIZE }, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK)
-            .ok()?;
+        let bitmap =
+            factory.GetImage(SIZE { cx: ICON_SIZE, cy: ICON_SIZE }, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK).ok()?;
         let pixels = bitmap_pixels(bitmap);
         let _ = DeleteObject(HGDIOBJ(bitmap.0));
         pixels
@@ -168,11 +167,8 @@ fn extract_icon(source: &Path) -> Option<(u32, u32, Vec<u8>)> {
 unsafe fn bitmap_pixels(bitmap: HBITMAP) -> Option<(u32, u32, Vec<u8>)> {
     unsafe {
         let mut info = BITMAP::default();
-        let read = GetObjectW(
-            HGDIOBJ(bitmap.0),
-            size_of::<BITMAP>() as i32,
-            Some(&mut info as *mut BITMAP as *mut c_void),
-        );
+        let read =
+            GetObjectW(HGDIOBJ(bitmap.0), size_of::<BITMAP>() as i32, Some(&mut info as *mut BITMAP as *mut c_void));
         if read == 0 || info.bmWidth <= 0 || info.bmHeight <= 0 {
             return None;
         }

@@ -72,7 +72,14 @@ const CHROMIUM_FILES: &[&str] = &["icudtl.dat", "libcef.dll", "chrome_elf.dll"];
 
 /// Evidence strong enough to count even in a Chromium/Electron app.
 const STRONG_EVIDENCE: &[&str] = &[
-    "Unity engine", "Unreal engine", "Steam game API", "GOG game API", "Epic game API", "Bink video", "PhysX", "FMOD audio",
+    "Unity engine",
+    "Unreal engine",
+    "Steam game API",
+    "GOG game API",
+    "Epic game API",
+    "Bink video",
+    "PhysX",
+    "FMOD audio",
 ];
 
 /// Libraries a program imports that point to a game.
@@ -94,8 +101,24 @@ const NOT_GAME_EXES: &[&str] =
 /// Shortcut names that point to a game's companion tools; the game itself is
 /// preferred when a folder has several.
 const TOOL_WORDS: &[&str] = &[
-    "launcher", "editor", "construction", "wizard", "config", "settings", "setup", "tool", "server", "benchmark",
-    "readme", "manual", "help", "website", "support", "uninstall", "dedicated", "mod ",
+    "launcher",
+    "editor",
+    "construction",
+    "wizard",
+    "config",
+    "settings",
+    "setup",
+    "tool",
+    "server",
+    "benchmark",
+    "readme",
+    "manual",
+    "help",
+    "website",
+    "support",
+    "uninstall",
+    "dedicated",
+    "mod ",
 ];
 
 /// Suggests games not already known. `known` are folders to ignore: every

@@ -18,13 +18,13 @@
 use std::env;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
 use std::os::windows::process::CommandExt;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, IPersistFile,
 };
-use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::UI::Shell::{
     FOLDERID_Desktop, FOLDERID_Downloads, IShellLinkW, KF_FLAG_DEFAULT, SHGetKnownFolderPath, ShellLink,
 };
@@ -72,7 +72,11 @@ fn taskbar_pin() -> Option<PathBuf> {
 
 /// Folders older versions saved data in, outside the install folder.
 fn legacy_data_dirs() -> Vec<PathBuf> {
-    ["APPDATA", "LOCALAPPDATA"].iter().filter_map(|var| env::var_os(var)).map(|p| PathBuf::from(p).join(APP_NAME)).collect()
+    ["APPDATA", "LOCALAPPDATA"]
+        .iter()
+        .filter_map(|var| env::var_os(var))
+        .map(|p| PathBuf::from(p).join(APP_NAME))
+        .collect()
 }
 
 /// Whether this process is the installed copy.
@@ -273,8 +277,12 @@ fn forget_in_windows_caches(exe: &Path) {
         else {
             continue;
         };
-        let ours: Vec<String> =
-            key.enum_values().filter_map(Result::ok).map(|(name, _)| name).filter(|n| n.to_lowercase().starts_with(&exe)).collect();
+        let ours: Vec<String> = key
+            .enum_values()
+            .filter_map(Result::ok)
+            .map(|(name, _)| name)
+            .filter(|n| n.to_lowercase().starts_with(&exe))
+            .collect();
         for name in ours {
             let _ = key.delete_value(name);
         }

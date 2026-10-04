@@ -49,10 +49,7 @@ pub fn steam_root() -> Option<PathBuf> {
     )
     .or_else(|| {
         registry::string_any(
-            &[
-                (HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Valve\Steam"),
-                (HKEY_LOCAL_MACHINE, r"SOFTWARE\Valve\Steam"),
-            ],
+            &[(HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Valve\Steam"), (HKEY_LOCAL_MACHINE, r"SOFTWARE\Valve\Steam")],
             "InstallPath",
         )
     })?;
@@ -67,7 +64,8 @@ fn library_folders(root: &Path) -> Vec<PathBuf> {
     if let Ok(text) = fs::read_to_string(root.join(r"steamapps\libraryfolders.vdf")) {
         let parsed = vdf::parse(&text);
         if let Some(libraries) = parsed.obj("libraryfolders") {
-            folders.extend(libraries.objects().filter_map(|(_, library)| library.str("path")).map(registry::clean_path));
+            folders
+                .extend(libraries.objects().filter_map(|(_, library)| library.str("path")).map(registry::clean_path));
         }
     }
     folders.push(root.to_path_buf());

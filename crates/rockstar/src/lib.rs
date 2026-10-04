@@ -56,7 +56,8 @@ fn scan(entries: &[UninstallEntry]) -> Vec<Game> {
             args: vec!["-launchTitleInFolder".into(), install_dir.display().to_string()],
             working_dir: None,
         };
-        let mut game = Game::new(format!("rockstar:{title_id}"), name.to_string(), Platform::Rockstar, Some(install_dir), launch);
+        let mut game =
+            Game::new(format!("rockstar:{title_id}"), name.to_string(), Platform::Rockstar, Some(install_dir), launch);
         // No documented link to a game's page, so this opens the launcher.
         game.show_in_launcher = Some(Action::Exe { path: launcher.clone(), args: Vec::new(), working_dir: None });
         game.icon_source = registry::icon_path(&entry.display_icon);

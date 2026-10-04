@@ -37,7 +37,8 @@ impl Library for Epic {
     }
 
     fn launcher(&self, cx: &ScanContext) -> Option<Launcher> {
-        let exe = registry::launcher_exe(cx.uninstall_entries(), &["com.epicgames.launcher"], Some("Epic Games Launcher"))?;
+        let exe =
+            registry::launcher_exe(cx.uninstall_entries(), &["com.epicgames.launcher"], Some("Epic Games Launcher"))?;
         Some(Launcher::from_exe(Platform::Epic, "Epic Games", exe))
     }
 
@@ -56,8 +57,8 @@ fn manifests_dir() -> Option<PathBuf> {
         "AppDataPath",
     )
     .map(|p| registry::clean_path(&p).join("Manifests"));
-    let fallback = std::env::var_os("ProgramData")
-        .map(|p| PathBuf::from(p).join(r"Epic\EpicGamesLauncher\Data\Manifests"));
+    let fallback =
+        std::env::var_os("ProgramData").map(|p| PathBuf::from(p).join(r"Epic\EpicGamesLauncher\Data\Manifests"));
     [from_registry, fallback].into_iter().flatten().find(|p| p.is_dir())
 }
 
@@ -84,19 +85,15 @@ fn scan() -> Vec<Game> {
             && !manifest.compatible_apps.iter().any(|a| a.starts_with("UE_"));
         // DLC and add-ons have their own manifest pointing at the main game.
         // Games themselves leave this empty or point at themselves.
-        let is_addon = manifest
-            .main_game_app_name
-            .as_deref()
-            .is_some_and(|main| !main.is_empty() && main != manifest.app_name);
+        let is_addon =
+            manifest.main_game_app_name.as_deref().is_some_and(|main| !main.is_empty() && main != manifest.app_name);
         let install_dir = registry::clean_path(&manifest.install_location);
         if !is_game || is_addon || manifest.is_incomplete_install || !install_dir.is_dir() {
             continue;
         }
 
-        let launch_id = format!(
-            "{}%3A{}%3A{}",
-            manifest.catalog_namespace, manifest.catalog_item_id, manifest.app_name
-        );
+        let launch_id =
+            format!("{}%3A{}%3A{}", manifest.catalog_namespace, manifest.catalog_item_id, manifest.app_name);
         let mut game = Game::new(
             format!("epic:{}", manifest.app_name),
             manifest.display_name,

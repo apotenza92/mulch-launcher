@@ -71,7 +71,10 @@ fn scan(entries: &[UninstallEntry]) -> Vec<Game> {
 
     for entry in entries {
         let Some(uid) = uid(&entry.uninstall_string) else { continue };
-        if uid.eq_ignore_ascii_case("battle.net") || entry.display_name.ends_with("Test") || entry.display_name.ends_with("Beta") {
+        if uid.eq_ignore_ascii_case("battle.net")
+            || entry.display_name.ends_with("Test")
+            || entry.display_name.ends_with("Beta")
+        {
             continue;
         }
         // Longest matching prefix wins, so `w1r` isn't mistaken for `w1`.

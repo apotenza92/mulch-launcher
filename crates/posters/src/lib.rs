@@ -50,12 +50,8 @@ pub fn fill_missing(games: &mut [Game]) {
     let _ = fs::create_dir_all(&dir);
     let ubisoft = ubisoft_thumbnails();
 
-    let wanted: Vec<usize> = games
-        .iter()
-        .enumerate()
-        .filter(|(_, g)| !matches!(g.art, Some(Art::Cover(_))))
-        .map(|(ix, _)| ix)
-        .collect();
+    let wanted: Vec<usize> =
+        games.iter().enumerate().filter(|(_, g)| !matches!(g.art, Some(Art::Cover(_)))).map(|(ix, _)| ix).collect();
 
     for batch in wanted.chunks(PARALLEL_FETCHES) {
         let found: Vec<(usize, Option<PathBuf>)> = std::thread::scope(|scope| {
@@ -80,7 +76,9 @@ pub fn fill_missing(games: &mut [Game]) {
 
 fn poster_for(game: &Game, dir: &Path, ubisoft: &[(u64, String)]) -> Option<PathBuf> {
     let key = cache_key(game);
-    if let Some(cached) = ["jpg", "png", "webp"].iter().map(|ext| dir.join(format!("{key}.{ext}"))).find(|p| p.is_file()) {
+    if let Some(cached) =
+        ["jpg", "png", "webp"].iter().map(|ext| dir.join(format!("{key}.{ext}"))).find(|p| p.is_file())
+    {
         return Some(cached);
     }
     let miss = dir.join(format!("{key}.none"));
@@ -99,8 +97,10 @@ fn poster_for(game: &Game, dir: &Path, ubisoft: &[(u64, String)]) -> Option<Path
         .chain(names.iter().filter_map(|name| steam_poster_url(name)))
         .chain(names.iter().filter_map(|name| wikidata_steam_id(name).map(|id| steam_cdn_poster(&id))))
         .chain(
-            std::iter::once_with(|| (game.platform == Platform::Ubisoft).then(|| ubisoft_thumbnail_url(game, ubisoft)).flatten())
-                .flatten(),
+            std::iter::once_with(|| {
+                (game.platform == Platform::Ubisoft).then(|| ubisoft_thumbnail_url(game, ubisoft)).flatten()
+            })
+            .flatten(),
         )
         .chain(names.iter().filter_map(|name| wikipedia_cover_url(name)));
     // Try each candidate in turn until one actually downloads as an image.
@@ -163,7 +163,10 @@ fn recently_missed(marker: &Path) -> bool {
 }
 
 fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new().timeout(TIMEOUT).user_agent("MulchLauncher/0.1 (https://github.com/apotenza92/mulch-launcher)").build()
+    ureq::AgentBuilder::new()
+        .timeout(TIMEOUT)
+        .user_agent("MulchLauncher/0.1 (https://github.com/apotenza92/mulch-launcher)")
+        .build()
 }
 
 fn get_json(url: &str) -> Option<Value> {
@@ -217,7 +220,8 @@ fn steam_poster_url(name: &str) -> Option<String> {
     if wanted.is_empty() {
         return None;
     }
-    let results = get_json(&format!("https://steamcommunity.com/actions/SearchApps/{}", url_encode(&search_term(name))))?;
+    let results =
+        get_json(&format!("https://steamcommunity.com/actions/SearchApps/{}", url_encode(&search_term(name))))?;
     let app_id = results.as_array()?.iter().find_map(|app| {
         if normalise(app["name"].as_str()?) != wanted {
             return None;

@@ -32,7 +32,12 @@ const CHAT_APPS: &[ChatApp] = &[
         uninstall_name: Some("Telegram Desktop"),
     },
     ChatApp { name: "Signal", schemes: &["sgnl"], store_packages: &[], uninstall_name: Some("Signal") },
-    ChatApp { name: "TeamSpeak", schemes: &["teamspeak", "ts3server"], store_packages: &[], uninstall_name: Some("TeamSpeak") },
+    ChatApp {
+        name: "TeamSpeak",
+        schemes: &["teamspeak", "ts3server"],
+        store_packages: &[],
+        uninstall_name: Some("TeamSpeak"),
+    },
     ChatApp { name: "Mumble", schemes: &["mumble"], store_packages: &[], uninstall_name: Some("Mumble") },
 ];
 

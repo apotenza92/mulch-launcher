@@ -45,7 +45,8 @@ mod tests {
     fn command_lines_run_verbatim() {
         let out = std::env::temp_dir().join(format!("mulch-cmdline-test-{}.txt", std::process::id()));
         let _ = std::fs::remove_file(&out);
-        let line = format!(r#""C:\Windows\System32\cmd.exe" /c echo --displayname="World of Warcraft"> "{}""#, out.display());
+        let line =
+            format!(r#""C:\Windows\System32\cmd.exe" /c echo --displayname="World of Warcraft"> "{}""#, out.display());
         run(&Action::CommandLine(line)).unwrap();
 
         let started = Instant::now();

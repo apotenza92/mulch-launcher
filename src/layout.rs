@@ -50,8 +50,9 @@ pub fn grid_width(columns: usize, tile: f32) -> f32 {
 }
 
 /// `groups`: how many games in each group, top to bottom (in the same order
-/// as the games themselves). Each group wraps onto full rows, with any
-/// leftover games on a shorter last row.
+/// as the games themselves). Each group takes as few rows as fit, with its
+/// games spread as evenly as possible and any extra on the top rows (5 games
+/// at 4 across: 3 then 2, never 4 then 1).
 pub fn layout(groups: &[usize], width: f32, size: usize) -> GridLayout {
     let tile_width = TILE_SIZES[size.min(TILE_SIZES.len() - 1)];
     let across = columns(width, tile_width);
@@ -60,10 +61,8 @@ pub fn layout(groups: &[usize], width: f32, size: usize) -> GridLayout {
         .enumerate()
         .filter(|(_, count)| **count > 0)
         .map(|(group, &count)| {
-            let mut rows = vec![across; count / across];
-            if count % across > 0 {
-                rows.push(count % across);
-            }
+            let row_count = count.div_ceil(across);
+            let rows = (0..row_count).map(|ix| count / row_count + usize::from(ix < count % row_count)).collect();
             Section { group, rows }
         })
         .collect();
@@ -95,9 +94,12 @@ mod tests {
     }
 
     #[test]
-    fn each_group_starts_a_row_and_wraps() {
+    fn each_group_starts_a_row_and_rows_are_balanced() {
         let width = grid_width(7, 180.);
-        assert_eq!(rows(&layout(&[3, 2, 12], width, DEFAULT_SIZE)), vec![vec![3], vec![2], vec![7, 5]]);
+        assert_eq!(rows(&layout(&[3, 2, 12], width, DEFAULT_SIZE)), vec![vec![3], vec![2], vec![6, 6]]);
+        assert_eq!(rows(&layout(&[0, 5, 13], width, DEFAULT_SIZE)), vec![vec![5], vec![7, 6]]);
+        assert_eq!(rows(&layout(&[5], grid_width(4, 180.), DEFAULT_SIZE)), vec![vec![3, 2]]);
+        assert_eq!(rows(&layout(&[17], width, DEFAULT_SIZE)), vec![vec![6, 6, 5]]);
         assert_eq!(layout(&[0, 5, 13], width, DEFAULT_SIZE).sections[0].group, 1);
     }
 

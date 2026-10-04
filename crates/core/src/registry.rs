@@ -55,7 +55,10 @@ pub fn uninstall_entries() -> Vec<UninstallEntry> {
                     key_name,
                 };
                 // HKCU isn't split into views, so the same key can appear twice.
-                if !entries.iter().any(|e: &UninstallEntry| e.key_name == entry.key_name && e.display_name == entry.display_name) {
+                if !entries
+                    .iter()
+                    .any(|e: &UninstallEntry| e.key_name == entry.key_name && e.display_name == entry.display_name)
+                {
                     entries.push(entry);
                 }
             }

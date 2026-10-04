@@ -2,18 +2,6 @@
 //! the left, buttons on the right) and every detected game as a tile, grouped
 //! by when it was last played and sized so they all fit if they can.
 
-use mulch_launcher::install;
-use mulch_launcher::launch;
-use mulch_launcher::layout::{
-    COVER_ASPECT, DEFAULT_SIZE, GRID_GAP, GridLayout, HEADING_HEIGHT, LABEL_HEIGHT, TILE_SIZES, grid_width,
-    layout as grid_layout,
-};
-use mulch_art as art;
-use mulch_history::{self as history, History};
-use mulch_launcher::scan::{self, Action, Art, Game, Launcher, Platform, ScanResult};
-use mulch_manual as manual;
-use mulch_posters as posters;
-use mulch_launcher::settings::Settings;
 use gpui_kit::component::button::*;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::notification::Notification;
@@ -22,12 +10,24 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{WindowExt, *};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
+use mulch_art as art;
 use mulch_discover::Suggestion;
+use mulch_history::{self as history, History};
+use mulch_launcher::install;
+use mulch_launcher::launch;
+use mulch_launcher::layout::{
+    COVER_ASPECT, DEFAULT_SIZE, GRID_GAP, GridLayout, HEADING_HEIGHT, LABEL_HEIGHT, TILE_SIZES, grid_width,
+    layout as grid_layout,
+};
+use mulch_launcher::scan::{self, Action, Art, Game, Launcher, Platform, ScanResult};
+use mulch_launcher::settings::Settings;
+use mulch_manual as manual;
+use mulch_posters as posters;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 const APP_NAME: &str = "MulchLauncher";
 
@@ -41,7 +41,11 @@ pub fn run() {
             // it. The title is still set for the taskbar and Alt+Tab.
             titlebar: Some(TitlebarOptions { title: Some(APP_NAME.into()), ..TitleBar::title_bar_options() }),
             app_owns_titlebar_drag: true,
-            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, default_window_size(saved_tile_width(), cx), cx))),
+            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                None,
+                default_window_size(saved_tile_width(), cx),
+                cx,
+            ))),
             // The width also grows to fit the toolbar (see `update_min_width`).
             window_min_size: Some(size(px(MIN_WINDOW_WIDTH), px(360.))),
             app_id: Some(APP_NAME.into()),
@@ -149,6 +153,8 @@ struct MulchApp {
     toolbar_widths: Rc<[Cell<f32>; 2]>,
     /// The native window, once known.
     hwnd: Option<isize>,
+    /// The game tile under the mouse, which shows its full name.
+    hovered_tile: Option<usize>,
     /// The tile width the window's width last snapped to.
     snapped_tile: Option<f32>,
     scanning: bool,
@@ -186,6 +192,7 @@ impl MulchApp {
             add_panel: None,
             toolbar_widths: Rc::default(),
             hwnd: None,
+            hovered_tile: None,
             snapped_tile: None,
             scanning: false,
             pending_play: None,
@@ -276,8 +283,7 @@ impl MulchApp {
     fn apply(&mut self, result: ScanResult, cx: &mut Context<Self>) {
         // Keep the art already showing (icons and downloaded posters arrive
         // after the scan), so a rescan doesn't blank every tile for a moment.
-        let mut shown: HashMap<String, Art> =
-            self.games.drain(..).filter_map(|g| Some((g.id, g.art?))).collect();
+        let mut shown: HashMap<String, Art> = self.games.drain(..).filter_map(|g| Some((g.id, g.art?))).collect();
         self.games = result.games;
         for game in &mut self.games {
             if !matches!(game.art, Some(Art::Cover(_))) {
@@ -363,10 +369,7 @@ impl MulchApp {
                         .position_mode(AnchoredPositionMode::Window)
                         .position(pending.at)
                         // Put the middle of the Play button under the cursor.
-                        .offset(point(
-                            px(-PLAY_CARD_WIDTH / 2.),
-                            px(-(PLAY_CARD_PADDING + PLAY_BUTTON_HEIGHT / 2.)),
-                        ))
+                        .offset(point(px(-PLAY_CARD_WIDTH / 2.), px(-(PLAY_CARD_PADDING + PLAY_BUTTON_HEIGHT / 2.))))
                         .snap_to_window_with_margin(px(8.))
                         .child(card),
                 ),
@@ -410,7 +413,8 @@ impl MulchApp {
                 game.art = Some(art.clone());
             }
         }
-        let launcher_icons: HashMap<&str, PathBuf> = launchers.into_iter().filter_map(|l| Some((l.name, l.icon?))).collect();
+        let launcher_icons: HashMap<&str, PathBuf> =
+            launchers.into_iter().filter_map(|l| Some((l.name, l.icon?))).collect();
         for launcher in self.launchers.iter_mut().chain(&mut self.social) {
             if let Some(icon) = launcher_icons.get(launcher.name) {
                 launcher.icon = Some(icon.clone());
@@ -518,42 +522,57 @@ impl MulchApp {
         let social_icons: Vec<AnyElement> =
             self.social.iter().enumerate().map(|(ix, app)| self.launcher_icon(("social", ix), app, cx)).collect();
         let zoom = vec![
-            Button::new("zoom-out")
-                .ghost()
-                .icon(Icon::empty().path("mulch/zoom-out.svg"))
-                .disabled(self.tile_size() == 0)
-                .tooltip("Smaller")
-                .on_click(cx.listener(|app, _, _, cx| app.zoom(-1, cx)))
-                .into_any_element(),
-            Button::new("zoom-reset")
-                .ghost()
-                .icon(Icon::empty().path("mulch/search.svg"))
-                .disabled(self.tile_size() == DEFAULT_SIZE)
-                .tooltip("Default size")
-                .on_click(cx.listener(|app, _, _, cx| app.reset_zoom(cx)))
-                .into_any_element(),
-            Button::new("zoom-in")
-                .ghost()
-                .icon(Icon::empty().path("mulch/zoom-in.svg"))
-                .disabled(self.tile_size() == TILE_SIZES.len() - 1)
-                .tooltip("Bigger")
-                .on_click(cx.listener(|app, _, _, cx| app.zoom(1, cx)))
-                .into_any_element(),
+            quick_tooltip(
+                "zoom-out-tip",
+                "Smaller",
+                Button::new("zoom-out")
+                    .ghost()
+                    .icon(Icon::empty().path("mulch/zoom-out.svg"))
+                    .disabled(self.tile_size() == 0)
+                    .on_click(cx.listener(|app, _, _, cx| app.zoom(-1, cx))),
+            )
+            .into_any_element(),
+            quick_tooltip(
+                "zoom-reset-tip",
+                "Default size",
+                Button::new("zoom-reset")
+                    .ghost()
+                    .icon(Icon::empty().path("mulch/search.svg"))
+                    .disabled(self.tile_size() == DEFAULT_SIZE)
+                    .on_click(cx.listener(|app, _, _, cx| app.reset_zoom(cx))),
+            )
+            .into_any_element(),
+            quick_tooltip(
+                "zoom-in-tip",
+                "Bigger",
+                Button::new("zoom-in")
+                    .ghost()
+                    .icon(Icon::empty().path("mulch/zoom-in.svg"))
+                    .disabled(self.tile_size() == TILE_SIZES.len() - 1)
+                    .on_click(cx.listener(|app, _, _, cx| app.zoom(1, cx))),
+            )
+            .into_any_element(),
         ];
         let actions = vec![
-            Button::new("rescan")
-                .ghost()
-                .icon(IconName::RefreshCw)
-                .loading(self.scanning)
-                .tooltip("Scan again")
-                .on_click(cx.listener(|app, _, _, cx| app.rescan(cx)))
-                .into_any_element(),
-            Button::new("add-game")
-                .primary()
-                .icon(IconName::Plus)
-                .label("Add game manually")
-                .on_click(cx.listener(|app, _, _, cx| app.open_add_panel(cx)))
-                .into_any_element(),
+            quick_tooltip(
+                "rescan-tip",
+                "Scan again",
+                Button::new("rescan")
+                    .ghost()
+                    .icon(IconName::RefreshCw)
+                    .loading(self.scanning)
+                    .on_click(cx.listener(|app, _, _, cx| app.rescan(cx))),
+            )
+            .into_any_element(),
+            quick_tooltip(
+                "add-game-tip",
+                "Add game manually",
+                Button::new("add-game")
+                    .ghost()
+                    .icon(IconName::Plus)
+                    .on_click(cx.listener(|app, _, _, cx| app.open_add_panel(cx))),
+            )
+            .into_any_element(),
         ];
 
         let border = cx.theme().border;
@@ -679,14 +698,27 @@ impl MulchApp {
                         .child(
                             Checkbox::new(("suggestion", ix))
                                 .checked(panel.selected.contains(&suggestion.exe))
-                                .on_click(cx.listener(move |app, _: &bool, _, cx| app.toggle_suggestion(exe.clone(), cx))),
+                                .on_click(
+                                    cx.listener(move |app, _: &bool, _, cx| app.toggle_suggestion(exe.clone(), cx)),
+                                ),
                         )
                         .child(
                             v_flex()
                                 .min_w_0()
                                 .child(div().text_sm().font_medium().child(suggestion.name.clone()))
-                                .child(div().text_xs().text_color(muted).truncate().child(suggestion.exe.display().to_string()))
-                                .child(div().text_xs().text_color(muted).child(format!("Looks like a game: {}", suggestion.reason))),
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(muted)
+                                        .truncate()
+                                        .child(suggestion.exe.display().to_string()),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(muted)
+                                        .child(format!("Looks like a game: {}", suggestion.reason)),
+                                ),
                         )
                 }))
                 .into_any_element(),
@@ -762,6 +794,7 @@ impl MulchApp {
             .hover(|style| style.bg(theme.list_hover))
             .child(launcher_glyph(name, launcher.icon.clone(), theme.muted_foreground))
             .tooltip(move |window, cx| Tooltip::new(format!("Open {name}")).build(window, cx))
+            .tooltip_show_delay(TOOLTIP_DELAY)
             .on_click(move |_, window, cx| run_action(&open, name, window, cx))
             .into_any_element()
     }
@@ -772,20 +805,23 @@ impl MulchApp {
 
         let play_game = game.clone();
 
+        let hovered = self.hovered_tile == Some(ix);
         div()
             .id(("game", ix))
-            .group("tile")
             .relative()
             .w(px(width))
-            .on_click(cx.listener(move |app, _, window, cx| app.request_play(play_game.clone(), window.mouse_position(), cx)))
-            .child(
-                div()
-                    .w(px(width))
-                    .h(px(height))
-                    .overflow_hidden()
-                    .bg(theme.muted)
-                    .child(artwork(game, width)),
+            .on_hover(cx.listener(move |app, hovered: &bool, _, cx| {
+                if *hovered {
+                    app.hovered_tile = Some(ix);
+                } else if app.hovered_tile == Some(ix) {
+                    app.hovered_tile = None;
+                }
+                cx.notify();
+            }))
+            .on_click(
+                cx.listener(move |app, _, window, cx| app.request_play(play_game.clone(), window.mouse_position(), cx)),
             )
+            .child(div().w(px(width)).h(px(height)).overflow_hidden().bg(theme.muted).child(artwork(game, width)))
             .child(
                 // One line, cut short with "…"; hovering shows the whole name
                 // in a pill on top, on one line, over the neighbouring tiles if
@@ -797,26 +833,26 @@ impl MulchApp {
                     .text_sm()
                     .font_medium()
                     .child(div().truncate().child(game.name.clone()))
-                    .child(
-                        deferred(
-                            div()
-                                .absolute()
-                                .top(px(-NAME_PILL_PADDING.1))
-                                .left(px(-NAME_PILL_PADDING.0))
-                                .px(px(NAME_PILL_PADDING.0))
-                                .py(px(NAME_PILL_PADDING.1))
-                                .whitespace_nowrap()
-                                .rounded_full()
-                                .bg(theme.popover)
-                                .border_1()
-                                .border_color(theme.border)
-                                .shadow_md()
-                                .invisible()
-                                .group_hover("tile", |s| s.visible())
-                                .child(game.name.clone()),
+                    .when(hovered, |this| {
+                        this.child(
+                            deferred(
+                                div()
+                                    .absolute()
+                                    .top(px(-NAME_PILL_PADDING.1))
+                                    .left(px(-NAME_PILL_PADDING.0))
+                                    .px(px(NAME_PILL_PADDING.0))
+                                    .py(px(NAME_PILL_PADDING.1))
+                                    .whitespace_nowrap()
+                                    .rounded_full()
+                                    .bg(theme.popover)
+                                    .border_1()
+                                    .border_color(theme.border)
+                                    .shadow_md()
+                                    .child(game.name.clone()),
+                            )
+                            .with_priority(1),
                         )
-                        .with_priority(1),
-                    ),
+                    }),
             )
             .child(div().text_xs().text_color(theme.muted_foreground).child(game.platform.label()))
             .h(px(height + LABEL_HEIGHT))
@@ -909,6 +945,18 @@ fn launcher_glyph(name: &str, icon: Option<PathBuf>, muted: Hsla) -> AnyElement 
     }
 }
 
+/// Tooltips show after this long (the UI kit's buttons wait half a second).
+const TOOLTIP_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// Wraps an element with a tooltip that shows after `TOOLTIP_DELAY`.
+fn quick_tooltip(id: &'static str, text: &'static str, child: impl IntoElement) -> Stateful<Div> {
+    div()
+        .id(id)
+        .child(child)
+        .tooltip(move |window, cx| Tooltip::new(text).build(window, cx))
+        .tooltip_show_delay(TOOLTIP_DELAY)
+}
+
 /// A full-width, left-aligned button for the play card.
 fn card_button(id: &'static str, icon: IconName, label: impl Into<SharedString>) -> Button {
     Button::new(id).ghost().small().w_full().justify_start().icon(icon).label(label)
@@ -924,11 +972,8 @@ impl Render for MulchApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.update_min_width(window);
         let viewport = window.viewport_size();
-        let layout = grid_layout(
-            &self.recency_groups(),
-            f32::from(viewport.width) - GRID_MARGIN_X * 2.,
-            self.tile_size(),
-        );
+        let layout =
+            grid_layout(&self.recency_groups(), f32::from(viewport.width) - GRID_MARGIN_X * 2., self.tile_size());
         let title_bar = self.title_bar(cx);
         let toolbar = self.toolbar(cx);
         // Rows built explicitly (rather than by wrapping) so each group starts a new row.
@@ -965,48 +1010,41 @@ impl Render for MulchApp {
         let play_card = self.pending_play.as_ref().map(|pending| self.play_card(pending, cx));
         let add_panel = self.add_panel.as_ref().map(|panel| self.add_panel(panel, cx));
 
-        v_flex()
-            .relative()
-            .size_full()
-            .children(play_card)
-            .children(add_panel)
-            .child(title_bar)
-            .child(toolbar)
-            .child(
-                div()
-                    .id("library")
-                    .flex_1()
-                    .overflow_y_scroll()
-                    .py(px(GRID_PADDING))
-                    .px(px(GRID_MARGIN_X))
-                    // Played in the last week, then the last month, then the rest,
-                    // all centred (exactly, given the window's snapped widths).
-                    .flex()
-                    .items_start()
-                    .justify_center()
-                    .when(empty, |this| {
-                        this.child(
-                            v_flex()
-                                .size_full()
-                                .items_center()
-                                .justify_center()
-                                .gap_2()
-                                .child(div().text_lg().child("No games found yet"))
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child("Install a game with any launcher, or use Add game manually."),
-                                ),
-                        )
-                    })
-                    .child(
+        v_flex().relative().size_full().children(play_card).children(add_panel).child(title_bar).child(toolbar).child(
+            div()
+                .id("library")
+                .flex_1()
+                .overflow_y_scroll()
+                .py(px(GRID_PADDING))
+                .px(px(GRID_MARGIN_X))
+                // Played in the last week, then the last month, then the rest,
+                // all centred (exactly, given the window's snapped widths).
+                .flex()
+                .items_start()
+                .justify_center()
+                .when(empty, |this| {
+                    this.child(
                         v_flex()
-                            .flex_shrink_0()
-                            .w(px(grid_width(layout.columns, layout.tile_width)))
-                            .gap(px(GRID_GAP))
-                            .children(sections),
-                    ),
-            )
+                            .size_full()
+                            .items_center()
+                            .justify_center()
+                            .gap_2()
+                            .child(div().text_lg().child("No games found yet"))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("Install a game with any launcher, or use Add game manually."),
+                            ),
+                    )
+                })
+                .child(
+                    v_flex()
+                        .flex_shrink_0()
+                        .w(px(grid_width(layout.columns, layout.tile_width)))
+                        .gap(px(GRID_GAP))
+                        .children(sections),
+                ),
+        )
     }
 }

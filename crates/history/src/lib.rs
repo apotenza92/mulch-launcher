@@ -126,7 +126,9 @@ fn process_paths() -> Vec<String> {
                 if let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, entry.th32ProcessID) {
                     let mut buffer = [0u16; 1024];
                     let mut len = buffer.len() as u32;
-                    if QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(buffer.as_mut_ptr()), &mut len).is_ok() {
+                    if QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(buffer.as_mut_ptr()), &mut len)
+                        .is_ok()
+                    {
                         paths.push(String::from_utf16_lossy(&buffer[..len as usize]));
                     }
                     let _ = CloseHandle(process);
