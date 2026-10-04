@@ -169,6 +169,9 @@ impl Render for Installer {
                     .child(
                         v_flex()
                             .id("found")
+                            // Room for the rows' hover background, which reaches past their content.
+                            .mx(px(-8.))
+                            .px(px(8.))
                             .max_h(px(INSTALLER_LIST_ROWS as f32 * INSTALLER_LIST_ROW))
                             .overflow_y_scroll()
                             .children(found.iter().enumerate().map(|(ix, game)| {
@@ -801,6 +804,9 @@ impl MulchApp {
                 .into_any_element(),
             Some(found) => v_flex()
                 .id("suggestions")
+                // Room for the rows' hover background, which reaches past their content.
+                .mx(px(-8.))
+                .px(px(8.))
                 .max_h(px(320.))
                 .overflow_y_scroll()
                 .children(found.iter().enumerate().map(|(ix, suggestion)| {
