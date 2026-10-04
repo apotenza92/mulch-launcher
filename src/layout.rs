@@ -1,6 +1,5 @@
-//! Grid layout: tiles come in a few fixed sizes the user steps through with
-//! zoom buttons (never resized as the window changes, so nothing jumps
-//! around); the window only decides how many fit across. Games are grouped
+//! Grid layout: tiles are one fixed size (never resized as the window changes,
+//! so nothing jumps around); the window only decides how many fit across. Games are grouped
 //! by when they were last played (last week, last month, everything else),
 //! each group starting a new row under its own label. Groups with no games
 //! don't appear, and with only one group there are no labels, so a new user
@@ -14,10 +13,8 @@ pub const LABEL_HEIGHT: f32 = 50.;
 /// A group's label (text_sm) and the space under it, above the gap to its first row.
 pub const HEADING_HEIGHT: f32 = 32.;
 
-/// Tile widths for each zoom step, smallest first.
-pub const TILE_SIZES: [f32; 5] = [120., 150., 180., 220., 270.];
-/// The middle size.
-pub const DEFAULT_SIZE: usize = 2;
+/// Every tile's width.
+pub const TILE_WIDTH: f32 = 180.;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Section {
@@ -53,8 +50,8 @@ pub fn grid_width(columns: usize, tile: f32) -> f32 {
 /// as the games themselves). Each group fills full rows, so widening the
 /// window always reflows, with leftovers on a shorter last row; but never a
 /// lone game there: the row above lends it one (5 at 4 across: 3 then 2).
-pub fn layout(groups: &[usize], width: f32, size: usize) -> GridLayout {
-    let tile_width = TILE_SIZES[size.min(TILE_SIZES.len() - 1)];
+pub fn layout(groups: &[usize], width: f32) -> GridLayout {
+    let tile_width = TILE_WIDTH;
     let across = columns(width, tile_width);
     let sections: Vec<Section> = groups
         .iter()
@@ -87,13 +84,6 @@ mod tests {
     }
 
     #[test]
-    fn tiles_stay_the_same_size_whatever_the_window() {
-        for width in [500., 900., 1400., 2500.] {
-            assert_eq!(layout(&[0, 0, 17], width, DEFAULT_SIZE).tile_width, TILE_SIZES[DEFAULT_SIZE]);
-        }
-    }
-
-    #[test]
     fn as_many_fit_across_as_the_width_allows() {
         let width = grid_width(8, 180.);
         assert_eq!(columns(width, 180.), 8);
@@ -104,34 +94,28 @@ mod tests {
 
     #[test]
     fn each_group_fills_full_rows_without_a_lone_game() {
-        let width = grid_width(7, 180.);
-        assert_eq!(rows(&layout(&[3, 2, 12], width, DEFAULT_SIZE)), vec![vec![3], vec![2], vec![7, 5]]);
-        assert_eq!(rows(&layout(&[0, 5, 15], width, DEFAULT_SIZE)), vec![vec![5], vec![7, 6, 2]]);
-        assert_eq!(rows(&layout(&[5], grid_width(4, 180.), DEFAULT_SIZE)), vec![vec![3, 2]]);
-        assert_eq!(rows(&layout(&[12], grid_width(10, 180.), DEFAULT_SIZE)), vec![vec![10, 2]]);
+        let width = grid_width(7, TILE_WIDTH);
+        assert_eq!(rows(&layout(&[3, 2, 12], width)), vec![vec![3], vec![2], vec![7, 5]]);
+        assert_eq!(rows(&layout(&[0, 5, 15], width)), vec![vec![5], vec![7, 6, 2]]);
+        assert_eq!(rows(&layout(&[5], grid_width(4, TILE_WIDTH))), vec![vec![3, 2]]);
+        assert_eq!(rows(&layout(&[12], grid_width(10, TILE_WIDTH))), vec![vec![10, 2]]);
         // Too narrow to lend one: 2 across stays 2 then 1.
-        assert_eq!(rows(&layout(&[3], grid_width(2, 180.), DEFAULT_SIZE)), vec![vec![2, 1]]);
-        assert_eq!(layout(&[0, 5, 13], width, DEFAULT_SIZE).sections[0].group, 1);
+        assert_eq!(rows(&layout(&[3], grid_width(2, TILE_WIDTH))), vec![vec![2, 1]]);
+        assert_eq!(layout(&[0, 5, 13], width).sections[0].group, 1);
     }
 
     #[test]
     fn only_several_groups_get_labels() {
-        assert!(!layout(&[0, 0, 17], 1200., DEFAULT_SIZE).labelled);
-        assert!(layout(&[3, 0, 14], 1200., DEFAULT_SIZE).labelled);
+        assert!(!layout(&[0, 0, 17], 1200.).labelled);
+        assert!(layout(&[3, 0, 14], 1200.).labelled);
     }
 
     #[test]
     fn every_game_is_placed() {
         for count in 1..60 {
             let groups = [count / 5, count / 3, count - count / 5 - count / 3];
-            let placed: usize = layout(&groups, 1200., 0).sections.iter().flat_map(|s| s.rows.iter()).sum();
+            let placed: usize = layout(&groups, 1200.).sections.iter().flat_map(|s| s.rows.iter()).sum();
             assert_eq!(placed, count);
         }
-    }
-
-    #[test]
-    fn sizes_step_up() {
-        assert!(TILE_SIZES.windows(2).all(|pair| pair[0] < pair[1]));
-        assert_eq!(layout(&[1], 1000., 99).tile_width, TILE_SIZES[4]);
     }
 }

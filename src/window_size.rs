@@ -12,13 +12,9 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClientRect, GetWindowRect, IsZoomed, MINMAXINFO, PostMessageW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
-    SetWindowPos, WM_APP, WM_GETMINMAXINFO, WM_SIZING, WMSZ_BOTTOMLEFT, WMSZ_LEFT, WMSZ_TOPLEFT,
+    GetClientRect, GetWindowRect, MINMAXINFO, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SetWindowPos, WM_GETMINMAXINFO,
+    WM_SIZING, WMSZ_BOTTOMLEFT, WMSZ_LEFT, WMSZ_TOPLEFT,
 };
-
-/// Posted to ourselves to snap the width after the current frame: resizing
-/// the window from inside gpui's own drawing is ignored.
-const SNAP_NOW: u32 = WM_APP + 0x4D;
 
 /// Minimum width of the window's content.
 static MIN_WIDTH: AtomicU32 = AtomicU32::new(0);
@@ -49,15 +45,10 @@ pub fn set_min(hwnd: isize, width: f32) {
 }
 
 /// Sets what widths fit whole columns: `base` (margins), plus columns of
-/// `step` (tile + gap), less one `gap`. With `snap_now`, the window moves to
-/// the nearest such width immediately (e.g. after zooming).
-pub fn set_snap(hwnd: isize, base: f32, step: f32, gap: f32, snap_now: bool) {
-    let swap = |value: &AtomicU32, new: f32| value.swap(new.to_bits(), Ordering::Relaxed) != new.to_bits();
-    let changed = [swap(&SNAP_BASE, base), swap(&SNAP_STEP, step), swap(&SNAP_GAP, gap)].contains(&true);
-    if changed && snap_now {
-        unsafe {
-            let _ = PostMessageW(Some(HWND(hwnd as _)), SNAP_NOW, WPARAM(0), LPARAM(0));
-        }
+/// `step` (tile + gap), less one `gap`.
+pub fn set_snap(base: f32, step: f32, gap: f32) {
+    for (value, new) in [(&SNAP_BASE, base), (&SNAP_STEP, step), (&SNAP_GAP, gap)] {
+        value.store(new.to_bits(), Ordering::Relaxed);
     }
 }
 
@@ -89,11 +80,6 @@ unsafe extern "system" fn subclass_proc(
     // gpui handles the message first; then we adjust its answer.
     let result = unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
     match msg {
-        SNAP_NOW => {
-            if !unsafe { IsZoomed(hwnd) }.as_bool() {
-                resize_content(hwnd, snapped(content_width(hwnd)));
-            }
-        }
         WM_GETMINMAXINFO => {
             let min = MIN_WIDTH.load(Ordering::Relaxed);
             if min > 0 {

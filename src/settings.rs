@@ -4,11 +4,31 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+/// Light, dark, or following Windows' setting.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeChoice {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl ThemeChoice {
+    /// The next choice when the theme button is clicked.
+    pub fn next(self) -> Self {
+        match self {
+            Self::System => Self::Light,
+            Self::Light => Self::Dark,
+            Self::Dark => Self::System,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// Chosen tile size (an index into `layout::TILE_SIZES`); the middle one if unset.
-    pub tile_size: Option<usize>,
+    pub theme: ThemeChoice,
 }
 
 fn path() -> Option<PathBuf> {

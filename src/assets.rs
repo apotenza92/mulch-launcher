@@ -6,11 +6,7 @@ use std::borrow::Cow;
 
 pub struct Assets;
 
-const OWN: &[(&str, &[u8])] = &[
-    ("mulch/zoom-in.svg", include_bytes!("../assets/icons/zoom-in.svg")),
-    ("mulch/zoom-out.svg", include_bytes!("../assets/icons/zoom-out.svg")),
-    ("mulch/search.svg", include_bytes!("../assets/icons/search.svg")),
-];
+const OWN: &[(&str, &[u8])] = &[("mulch/monitor.svg", include_bytes!("../assets/icons/monitor.svg"))];
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> anyhow::Result<Option<Cow<'static, [u8]>>> {
