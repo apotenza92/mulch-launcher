@@ -1,7 +1,9 @@
-//! MulchLauncher's own record of when each game was last played, for sorting
-//! by recency. The only source, so every platform is treated the same (most
-//! launchers keep play history only in the user's online account, so none
-//! of them are read).
+//! When each game was last played, for sorting by recency, from every
+//! source that records it reliably on this PC; the latest wins:
+//! - The game's launcher, where it keeps that locally (Steam).
+//! - Windows' Game Bar, which notes when each program it recognises as a
+//!   game last ran, whichever launcher started it (see `game_bar`).
+//! - MulchLauncher's own tracking, which covers everything else.
 //!
 //! A game counts as played when it's started from MulchLauncher, or whenever
 //! a running process's executable lives in one of the game's folders, which
@@ -10,6 +12,8 @@
 
 use mulch_core::Game;
 use serde::{Deserialize, Serialize};
+mod game_bar;
+
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -19,6 +23,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct History {
     /// Game id -> last played, Unix seconds.
     last_played: HashMap<String, u64>,
+    /// Game Bar's record: (lowercase exe path, last ran), re-read on demand.
+    #[serde(skip)]
+    game_bar: Vec<(String, u64)>,
 }
 
 fn path() -> Option<PathBuf> {
@@ -31,10 +38,17 @@ pub fn now() -> u64 {
 
 impl History {
     pub fn load() -> Self {
-        path()
+        let mut history: Self = path()
             .and_then(|p| fs::read_to_string(p).ok())
             .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        history.refresh_windows_record();
+        history
+    }
+
+    /// Re-reads Windows' record of games run (cheap: one registry key).
+    pub fn refresh_windows_record(&mut self) {
+        self.game_bar = game_bar::last_run();
     }
 
     pub fn save(&self) {
@@ -52,8 +66,20 @@ impl History {
         *entry = (*entry).max(when);
     }
 
+    /// The latest of Mulch's record, the launcher's and Windows'.
     pub fn last_played(&self, game: &Game) -> Option<u64> {
-        self.last_played.get(&game.id).copied()
+        let dirs: Vec<String> = game
+            .process_dirs
+            .iter()
+            .map(|d| format!("{}\\", d.to_string_lossy().trim_end_matches('\\').to_lowercase()))
+            .collect();
+        let windows = self
+            .game_bar
+            .iter()
+            .filter(|(exe, _)| dirs.iter().any(|dir| exe.starts_with(dir.as_str())))
+            .map(|(_, when)| *when)
+            .max();
+        self.last_played.get(&game.id).copied().max(game.last_played).max(windows)
     }
 
     /// Sorts most recently played first; never-played games follow A–Z.
@@ -122,6 +148,20 @@ mod tests {
 
     fn game(id: &str, name: &str) -> Game {
         Game::new(id.into(), name.into(), Platform::Manual, None, Action::Uri(String::new()))
+    }
+
+    #[test]
+    fn latest_source_wins() {
+        let mut history = History::default();
+        history.record("a", 100);
+        history.game_bar = vec![(r"d:\games\alpha\bin\alpha.exe".into(), 300)];
+        let mut g = game("a", "Alpha");
+        g.process_dirs = vec![r"D:\Games\Alpha".into()];
+        g.last_played = Some(200);
+        assert_eq!(history.last_played(&g), Some(300));
+        // A folder that merely starts the same isn't the game's.
+        g.process_dirs = vec![r"D:\Games\Alp".into()];
+        assert_eq!(history.last_played(&g), Some(200));
     }
 
     #[test]

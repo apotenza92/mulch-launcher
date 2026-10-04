@@ -58,10 +58,12 @@ with no poster anywhere are only re-checked weekly. No logins or API keys.
 ## Sort order and play history
 
 Games are sorted most recently played first; never-played games follow A-Z.
-Last played comes only from MulchLauncher's own tracking, the same for every
-platform (no launcher's data is read, since most can't be read reliably):
-starting a game from MulchLauncher, or any of the game's programs running
-from its folder (checked every 30 seconds while MulchLauncher is open). The
+Last played is the latest of every source that records it reliably on this
+PC: the launcher, where it keeps that locally (Steam); Windows' Game Bar,
+which notes when each program it recognises as a game last ran, whatever
+started it; and MulchLauncher's own tracking for everything else (starting a
+game from MulchLauncher, or any of the game's programs running from its
+folder, checked every 30 seconds while MulchLauncher is open). The
 grid groups games played in the last week, the last month, and everything
 else. Stored in `%APPDATA%\MulchLauncher\history.json`.
 Hours played aren't shown: most launchers keep them only in your online

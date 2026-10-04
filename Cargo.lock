@@ -4016,6 +4016,7 @@ name = "mulch-battlenet"
 version = "0.1.0"
 dependencies = [
  "mulch-core",
+ "serde_json",
 ]
 
 [[package]]
@@ -4067,6 +4068,7 @@ dependencies = [
  "serde",
  "serde_json",
  "windows 0.61.3",
+ "winreg",
 ]
 
 [[package]]

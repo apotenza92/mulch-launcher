@@ -163,6 +163,7 @@ impl MulchApp {
 
     /// Re-sorts most recently played first (never-played games A-Z).
     fn resort(&mut self, cx: &mut Context<Self>) {
+        self.history.refresh_windows_record();
         self.history.sort(&mut self.games);
         cx.notify();
     }

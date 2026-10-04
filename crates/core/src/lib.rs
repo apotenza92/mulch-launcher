@@ -76,6 +76,9 @@ pub struct Game {
     pub art: Option<Art>,
     /// An executable or .ico to take an icon from when there's no art.
     pub icon_source: Option<PathBuf>,
+    /// When the launcher itself last saw it played (Unix seconds), for the
+    /// launchers that reliably record that on this PC (Steam).
+    pub last_played: Option<u64>,
 }
 
 impl Game {
@@ -91,6 +94,7 @@ impl Game {
             show_in_launcher: None,
             art: None,
             icon_source: None,
+            last_played: None,
         }
     }
 }

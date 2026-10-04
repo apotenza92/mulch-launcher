@@ -2,9 +2,14 @@
 //! uninstall command contains `--uid=<internal id>`. The internal id maps to a
 //! product code (used to launch it) through the list below, taken from
 //! Playnite's Battle.net library.
+//!
+//! When each game was last played comes from Battle.net's own config
+//! (`%APPDATA%\Battle.net\Battle.net.config`, `Games > <key> > LastPlayed`,
+//! keyed by the same internal id as `ServerUid`).
 
 use mulch_core::registry::{self, UninstallEntry};
 use mulch_core::{Action, Game, Launcher, Library, Platform, ScanContext};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// (product code, internal id prefix, name). Matched by prefix because ids
@@ -61,6 +66,7 @@ impl Library for BattleNet {
 
 fn scan(entries: &[UninstallEntry]) -> Vec<Game> {
     let Some(client) = client_exe(entries) else { return Vec::new() };
+    let last_played = config_last_played();
     let mut games = Vec::new();
 
     for entry in entries {
@@ -92,9 +98,35 @@ fn scan(entries: &[UninstallEntry]) -> Vec<Game> {
         // `battlenet://<code>` opens the game's tab in Battle.net.
         game.show_in_launcher = Some(Action::Uri(format!("battlenet://{code}")));
         game.icon_source = registry::icon_path(&entry.display_icon);
+        game.last_played = last_played.get(&uid.to_lowercase()).copied();
         games.push(game);
     }
     games
+}
+
+/// Internal id (lowercase) -> last played (Unix seconds), from Battle.net's config.
+fn config_last_played() -> HashMap<String, u64> {
+    let Some(appdata) = std::env::var_os("APPDATA") else { return HashMap::new() };
+    let path = PathBuf::from(appdata).join(r"Battle.net\Battle.net.config");
+    let Some(config) = std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok()) else {
+        return HashMap::new();
+    };
+    parse_last_played(&config)
+}
+
+fn parse_last_played(config: &serde_json::Value) -> HashMap<String, u64> {
+    let Some(games) = config["Games"].as_object() else { return HashMap::new() };
+    games
+        .iter()
+        .filter_map(|(key, game)| {
+            let when = &game["LastPlayed"];
+            let when = when.as_u64().or_else(|| when.as_str()?.trim().parse().ok())?;
+            // Seconds, though accept milliseconds too.
+            let when = if when > 100_000_000_000 { when / 1000 } else { when };
+            let uid = game["ServerUid"].as_str().unwrap_or(key);
+            (when > 0).then(|| (uid.to_lowercase(), when))
+        })
+        .collect()
 }
 
 /// `--uid=<id>` from a Battle.net uninstall command.
@@ -121,6 +153,19 @@ fn client_exe(entries: &[UninstallEntry]) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_last_played_from_config() {
+        let config = serde_json::json!({ "Games": {
+            "battle_net": { "ServerUid": "battle.net", "Resumable": "false" },
+            "wow": { "ServerUid": "wow_enus", "LastPlayed": "1759500000" },
+            "prometheus": { "LastPlayed": 1759400000000u64 }
+        }});
+        let played = parse_last_played(&config);
+        assert_eq!(played.get("wow_enus"), Some(&1759500000));
+        assert_eq!(played.get("prometheus"), Some(&1759400000));
+        assert_eq!(played.len(), 2);
+    }
 
     #[test]
     fn reads_uid_from_uninstall_command() {
