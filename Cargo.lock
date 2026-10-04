@@ -4075,6 +4075,7 @@ dependencies = [
 name = "mulch-launcher"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "gpui-kit",
  "mulch-art",
  "mulch-battlenet",

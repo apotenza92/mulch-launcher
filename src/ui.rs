@@ -31,7 +31,7 @@ use std::path::PathBuf;
 const APP_NAME: &str = "MulchLauncher";
 
 pub fn run() {
-    gpui_kit::application().with_assets(gpui_kit::assets::Assets).run(move |cx| {
+    gpui_kit::application().with_assets(crate::assets::Assets).run(move |cx| {
         gpui_kit::init(cx);
         Theme::change(ThemeMode::Dark, None, cx);
 
@@ -54,7 +54,7 @@ pub fn run() {
 /// The one window shown when the downloaded copy is run: an "Add to desktop"
 /// checkbox (on by default) and Install. Closing it installs nothing.
 pub fn run_installer() {
-    gpui_kit::application().with_assets(gpui_kit::assets::Assets).run(move |cx| {
+    gpui_kit::application().with_assets(crate::assets::Assets).run(move |cx| {
         gpui_kit::init(cx);
         Theme::change(ThemeMode::Dark, None, cx);
         let options = WindowOptions {
@@ -532,20 +532,30 @@ impl MulchApp {
                         Button::new("zoom-out")
                             .ghost()
                             .small()
-                            .icon(IconName::Minus)
+                            .icon(Icon::empty().path("mulch/zoom-out.svg"))
                             .disabled(self.tile_size() == 0)
                             .tooltip("Smaller")
                             .on_click(cx.listener(|app, _, _, cx| app.zoom(-1, cx))),
                     )
                     .child(
+                        Button::new("zoom-reset")
+                            .ghost()
+                            .small()
+                            .icon(Icon::empty().path("mulch/search.svg"))
+                            .disabled(self.tile_size() == DEFAULT_SIZE)
+                            .tooltip("Default size")
+                            .on_click(cx.listener(|app, _, _, cx| app.reset_zoom(cx))),
+                    )
+                    .child(
                         Button::new("zoom-in")
                             .ghost()
                             .small()
-                            .icon(IconName::Plus)
+                            .icon(Icon::empty().path("mulch/zoom-in.svg"))
                             .disabled(self.tile_size() == TILE_SIZES.len() - 1)
                             .tooltip("Bigger")
                             .on_click(cx.listener(|app, _, _, cx| app.zoom(1, cx))),
                     )
+                    .child(div().w(px(1.)).h(px(LAUNCHER_SIZE - 12.)).mx_1().bg(cx.theme().border))
                     .child(
                         Button::new("rescan")
                             .ghost()
@@ -595,6 +605,12 @@ impl MulchApp {
     fn zoom(&mut self, step: isize, cx: &mut Context<Self>) {
         let size = self.tile_size().saturating_add_signed(step).min(TILE_SIZES.len() - 1);
         self.settings.tile_size = Some(size);
+        self.settings.save();
+        cx.notify();
+    }
+
+    fn reset_zoom(&mut self, cx: &mut Context<Self>) {
+        self.settings.tile_size = None;
         self.settings.save();
         cx.notify();
     }
