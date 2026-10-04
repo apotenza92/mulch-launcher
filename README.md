@@ -95,10 +95,11 @@ it in `src/scan.rs`. `MulchLauncher --scan steam` scans one library on its own.
 
 ## Install
 
-Run `MulchLauncher.exe` from anywhere (e.g. Downloads). With no questions or
-setup screens, it installs itself per-user (no admin) to
-`%LOCALAPPDATA%\Programs\MulchLauncher` with a Start menu shortcut and an
-"Installed apps" entry, then opens. (Windows doesn't let apps pin themselves
+Run `MulchLauncher.exe` from anywhere (e.g. Downloads). One small window asks
+just one thing, "Add to desktop" (on by default), then Install: it installs
+per-user (no admin) to `%LOCALAPPDATA%\Programs\MulchLauncher` with Start menu
+(and desktop) shortcuts and an "Installed apps" entry, opens, and deletes the
+downloaded file if it was in Downloads. (Windows doesn't let apps pin themselves
 to the taskbar; right-click it to pin.)
 
 Everything it saves lives in that folder's `data` subfolder: settings, play
