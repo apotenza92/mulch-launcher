@@ -30,6 +30,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 const APP_NAME: &str = "MulchLauncher";
+const REPO_URL: &str = "https://github.com/apotenza92/mulch-launcher";
 
 /// `restore`: set when restarting after an update, to reopen where the old
 /// copy was, in the background.
@@ -919,7 +920,28 @@ impl MulchApp {
                 .icon(IconName::Plus)
                 .on_click(cx.listener(|app, _, _, cx| app.open_add_panel(cx))),
         );
-        deferred(
+        // The source on GitHub, beside the window controls on the right.
+        let github = quick_tooltip(
+            "github-tip",
+            "MulchLauncher on GitHub",
+            Button::new("github")
+                .ghost()
+                .small()
+                .icon(Icon::empty().path("mulch/github.svg"))
+                .on_click(|_, _, cx| cx.open_url(REPO_URL)),
+        );
+        let github = deferred(
+            h_flex()
+                .id("title-github")
+                .occlude()
+                .absolute()
+                .top_0()
+                .right(px(WINDOW_CONTROLS_WIDTH + 12. + 4.))
+                .h(px(TITLE_BAR_HEIGHT))
+                .items_center()
+                .child(github),
+        );
+        let left = deferred(
             h_flex()
                 .id("title-buttons")
                 .occlude()
@@ -929,8 +951,9 @@ impl MulchApp {
                 .h(px(TITLE_BAR_HEIGHT))
                 .items_center()
                 .child(add),
-        )
-        .into_any_element()
+        );
+        // A full-width layer, so the GitHub button can sit against the right edge.
+        div().absolute().top_0().left_0().w_full().h(px(TITLE_BAR_HEIGHT)).child(left).child(github).into_any_element()
     }
     /// Applies Windows' light or dark mode.
     fn apply_theme(&self, window: &mut Window, cx: &mut Context<Self>) {
