@@ -1150,10 +1150,6 @@ impl MulchApp {
         let lift = Tween::value(&self.lifts, &game.id);
         // Glass buttons fade in over the poster while it's hovered.
         let actions = (lift > 0.).then(|| self.poster_actions(game, (width, height), cx).opacity(lift.min(1.)));
-        // How much the hovered poster grows on each side.
-        let grow_x = width * HOVER_GROW * lift;
-        let grow_y = grow_x * COVER_ASPECT;
-        let drop = if cx.theme().mode.is_dark() { 0.7 } else { 0.4 };
 
         let theme = cx.theme();
         let poster = div().absolute().top_0().left_0().size_full().rounded(px(TILE_RADIUS)).bg(theme.muted).child(
@@ -1179,15 +1175,14 @@ impl MulchApp {
             .then(|| text_width(&game.name, window, cx) - width)
             .filter(|o| *o > 0.)
             .map(|o| o + MARQUEE_END_ROOM);
-        // The glow takes the poster's own colour where it has one.
+        // The rim's light is a pale tint of the poster's own colour where it has one.
         let accent = match &game.art {
             Some(Art::Cover(path) | Art::Icon(path)) => self.accents.get(path).copied(),
             None => None,
         };
-        let glow = match accent {
-            Some(color) => with_alpha(color, if theme.mode.is_dark() { 0.55 } else { 0.5 }),
-            None if theme.mode.is_dark() => gpui_kit::white().opacity(0.25),
-            None => gpui_kit::black().opacity(0.35),
+        let shine = match accent {
+            Some(color) => Hsla { l: color.l.max(0.85), a: 1., ..color },
+            None => gpui_kit::white(),
         };
         let leaving = Tween::value(&self.leaving, &game.id);
         let staggered = self.first_shown.is_none_or(|at| at.elapsed() < STAGGER_WINDOW);
@@ -1235,67 +1230,33 @@ impl MulchApp {
                 }
             }))
             .child(
-                // Hovered, the poster comes out towards you: it grows, centred where
-                // it is, and casts a deep shadow plus a glow in its own colour.
-                // Drawn after the other tiles, so its shadow falls over them; its
-                // slot keeps the resting size, so growing doesn't push the name down.
+                // The poster stays put; hovered, it shines: a sheen on the side the
+                // mouse is on and a soft light around its edge.
                 div()
                     .relative()
                     .w(px(width))
                     .h(px(height))
-                    // Measure the resting slot, not the moving poster, so the mouse's
-                    // place on it doesn't shift as the poster leans.
-                    .when(hovered, |slot| {
+                    .overflow_hidden()
+                    .rounded(px(TILE_RADIUS))
+                    .bg(theme.muted)
+                    .child(poster)
+                    .when(hovered, |frame| {
+                        // Measure the poster, so the mouse's place on it is known.
                         let bounds = self.hovered_bounds.clone();
-                        slot.child(canvas(move |b, _, _| bounds.set(b), |_, _, _, _| {}).absolute().size_full())
+                        frame
+                            .child(canvas(move |b, _, _| bounds.set(b), |_, _, _, _| {}).absolute().size_full())
+                            .child(sheen(dx, dy))
                     })
-                    .child(
-                        deferred(
-                            div()
-                                .relative()
-                                .w(px(width + 2. * grow_x))
-                                .h(px(height + 2. * grow_y))
-                                .overflow_hidden()
-                                .rounded(px(TILE_RADIUS))
-                                .bg(theme.muted)
-                                .child(poster)
-                                // A soft sheen on the side the mouse is on.
-                                .when(hovered, |frame| frame.child(sheen(dx, dy)))
-                                .when(lift > 0., |frame| frame.child(rim(dx, dy, lift)))
-                                // Lifts, leans toward the mouse, and casts its shadow away from it.
-                                .left(px(-grow_x + TILT_SHIFT * dx * lift))
-                                .top(px(-grow_y + TILT_SHIFT * dy * lift))
-                                .shadow(vec![
-                                    BoxShadow {
-                                        color: gpui_kit::black().opacity(drop * lift.min(1.)),
-                                        offset: point(
-                                            px(-TILT_SHADOW * dx * lift),
-                                            px((DROP_SHADOW_Y - TILT_SHADOW * dy) * lift),
-                                        ),
-                                        blur_radius: px(DROP_SHADOW_BLUR * lift),
-                                        spread_radius: px(-6. * lift),
-                                        inset: false,
-                                    },
-                                    BoxShadow {
-                                        color: glow.opacity(lift.min(1.)),
-                                        offset: point(px(-TILT_SHADOW * dx * lift), px((8. - TILT_SHADOW * dy) * lift)),
-                                        blur_radius: px(24. * lift),
-                                        spread_radius: px(0.),
-                                        inset: false,
-                                    },
-                                ]),
-                        )
-                        .with_priority(0),
-                    ),
+                    .when(lift > 0., |frame| frame.child(rim(dx, dy, lift, shine))),
             )
             // The buttons float on their own plane above the poster: not clipped
-            // to its edges, and shifting further than it with the tilt.
+            // to its edges, and shifting toward the mouse.
             .children(actions.map(|actions| {
                 deferred(
                     div()
                         .absolute()
-                        .left(px(TILT_SHIFT * BUTTON_PARALLAX * dx * lift))
-                        .top(px(TILT_SHIFT * BUTTON_PARALLAX * dy * lift))
+                        .left(px(BUTTON_SHIFT * dx * lift))
+                        .top(px(BUTTON_SHIFT * dy * lift))
                         .w(px(width))
                         .h(px(height))
                         .child(actions),
@@ -1305,17 +1266,8 @@ impl MulchApp {
             .child({
                 // One line, cut short with "…"; while hovered, a name that's cut
                 // short slides along to show the rest, and back.
-                // Centred under the poster, and pops out with it: it moves down with
-                // the bigger poster and leans toward the mouse the same way.
-                let line = div()
-                    .relative()
-                    .left(px(TILT_SHIFT * dx * lift))
-                    .top(px(grow_y + TILT_SHIFT * dy * lift))
-                    .h(px(NAME_LINE_HEIGHT))
-                    .mt_2()
-                    .text_sm()
-                    .font_medium()
-                    .overflow_hidden();
+                // Centred under the poster.
+                let line = div().h(px(NAME_LINE_HEIGHT)).mt_2().text_sm().font_medium().overflow_hidden();
                 match overflow {
                     Some(overflow) => line.child(div().whitespace_nowrap().child(game.name.clone()).with_animation(
                         ElementId::Name(format!("marquee-{}", game.id).into()),
@@ -1439,9 +1391,6 @@ fn blend_colors(from: &ThemeColor, to: &ThemeColor, t: f32) -> ThemeColor {
 /// Corner rounding for posters, panels and cards.
 const TILE_RADIUS: f32 = 8.;
 
-/// How far a hovered poster leans toward the mouse, and its shadow away.
-const TILT_SHIFT: f32 = 7.;
-const TILT_SHADOW: f32 = 10.;
 /// How quickly the tilt follows the mouse, in seconds (time constant).
 const TILT_EASE: f32 = 0.12;
 
@@ -1460,7 +1409,7 @@ fn sheen(dx: f32, dy: f32) -> Div {
 
 /// A soft light around a hovered poster's edge, a little brighter on the
 /// side the mouse is on, so it reads as catching the light.
-fn rim(dx: f32, dy: f32, lift: f32) -> Div {
+fn rim(dx: f32, dy: f32, lift: f32, shine: Hsla) -> Div {
     let light = lift.clamp(0., 1.);
     div()
         .absolute()
@@ -1469,9 +1418,9 @@ fn rim(dx: f32, dy: f32, lift: f32) -> Div {
         .size_full()
         .rounded(px(TILE_RADIUS))
         .border_1()
-        .border_color(gpui_kit::white().opacity(0.22 * light))
+        .border_color(with_alpha(shine, 0.3 * light))
         .shadow(vec![BoxShadow {
-            color: gpui_kit::white().opacity(RIM_LIGHT * light),
+            color: with_alpha(shine, RIM_LIGHT * light),
             offset: point(px(-RIM_LEAN * dx), px(-RIM_LEAN * dy)),
             blur_radius: px(RIM_BLUR),
             spread_radius: px(0.),
@@ -1482,12 +1431,7 @@ fn rim(dx: f32, dy: f32, lift: f32) -> Div {
 const RIM_LIGHT: f32 = 0.38;
 const RIM_BLUR: f32 = 16.;
 const RIM_LEAN: f32 = 4.;
-/// How quickly a hovered poster comes out.
-/// A hovered poster grows by this share of its width on each side.
-const HOVER_GROW: f32 = 0.06;
-/// Its drop shadow: how far below it falls, and how soft it is.
-const DROP_SHADOW_Y: f32 = 16.;
-const DROP_SHADOW_BLUR: f32 = 50.;
+/// How quickly a hovered poster lights up (and its buttons appear).
 const LIFT_DURATION: std::time::Duration = std::time::Duration::from_millis(520);
 /// Tiles' entrance: how far they rise, for how long, and the stagger between them.
 const ENTER_RISE: f32 = 12.;
@@ -1649,9 +1593,10 @@ fn default_window_size(cx: &App) -> gpui_kit::Size<Pixels> {
 /// No words inside the tile: the name is always shown underneath.
 fn artwork(game: &Game, width: f32) -> AnyElement {
     match &game.art {
-        // Shown whole: scaled to fit inside the tile, never cropped or stretched.
+        // Fills the tile: scaled evenly until it covers it, trimming what spills
+        // over; never stretched.
         Some(Art::Cover(path)) => {
-            img(path.clone()).size_full().rounded(px(TILE_RADIUS)).object_fit(ObjectFit::Contain).into_any_element()
+            img(path.clone()).size_full().rounded(px(TILE_RADIUS)).object_fit(ObjectFit::Cover).into_any_element()
         }
         Some(Art::Icon(path)) => div()
             .size_full()
@@ -1769,8 +1714,8 @@ const GLASS_PRESS_GROW: f32 = 18.;
 /// How long a button takes to spring to hovered or resting, and to pressed.
 const BUTTON_SPRING: std::time::Duration = std::time::Duration::from_millis(480);
 const BUTTON_PRESS_SPRING: std::time::Duration = std::time::Duration::from_millis(340);
-/// The buttons' layer moves this much more than the poster as it tilts (parallax).
-const BUTTON_PARALLAX: f32 = 2.;
+/// How far a hovered poster's buttons shift toward the mouse (parallax).
+const BUTTON_SHIFT: f32 = 14.;
 const GLYPH_FILL: f32 = 0.5;
 
 /// Glyph ink: white on dark glass, near-black on light glass (as the buttons' icons).
