@@ -1310,7 +1310,7 @@ const GROUP_NAMES: [&str; 3] = ["Played in the last week", "Played in the last m
 const ICON_SHARE: f32 = 0.6;
 /// Glass buttons over a hovered poster: sizes, and distance from its edges.
 const GLASS_BUTTON: f32 = 42.;
-const GLASS_PLAY_BUTTON: f32 = 152.;
+const GLASS_PLAY_BUTTON: f32 = 128.;
 const GLASS_INSET: f32 = 14.;
 /// Space above and below the grid.
 const GRID_PADDING: f32 = 20.;
