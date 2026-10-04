@@ -439,11 +439,10 @@ impl MulchApp {
         cx.notify();
     }
 
-    /// Glass buttons over a hovered poster: Play follows the cursor (staying
-    /// clear of the bottom row); along the bottom, Show in folder on the left
+    /// Glass buttons over a hovered poster: Play in the middle; along the bottom, Show in folder on the left
     /// and the game's other action on the right: Show in its launcher, or for
     /// games the user added, Remove (which asks again first).
-    fn poster_actions(&self, game: &Game, size: (f32, f32), cursor: (f32, f32), cx: &mut Context<Self>) -> Div {
+    fn poster_actions(&self, game: &Game, size: (f32, f32), cx: &mut Context<Self>) -> Div {
         let dark = cx.theme().mode.is_dark();
         let mut left: Option<AnyElement> = None;
         let mut right: Option<AnyElement> = None;
@@ -498,12 +497,10 @@ impl MulchApp {
             right = Some(with_tooltip(button, tip).into_any_element());
         }
 
-        // Play sits under the cursor, kept inside the poster and above the bottom row.
+        // Play in the middle of the poster.
         let (width, height) = size;
         let half = GLASS_PLAY_BUTTON / 2.;
-        let lowest = height - GLASS_INSET - GLASS_BUTTON - GLASS_GAP - half;
-        let x = cursor.0.clamp(GLASS_INSET + half, width - GLASS_INSET - half);
-        let y = cursor.1.clamp(GLASS_INSET + half, lowest.max(GLASS_INSET + half));
+        let (x, y) = (width / 2., height / 2.);
         let g = game.clone();
         let play = glass_button("play", IconName::Play, GLASS_PLAY_BUTTON, false, dark).on_click(cx.listener(
             move |app, _, window, cx| {
@@ -1032,9 +1029,8 @@ impl MulchApp {
         let clicked = game.clone();
         let lift = Tween::value(&self.lifts, &game.id);
         // Glass buttons fade in over the poster while it's hovered.
-        let (dx, dy) = if self.hovered_tile == Some(ix) { self.tilt } else { (0., 0.) };
-        let cursor = ((dx + 1.) / 2. * width, (dy + 1.) / 2. * height);
-        let actions = (lift > 0.).then(|| self.poster_actions(game, (width, height), cursor, cx).opacity(lift));
+        let actions = (lift > 0.).then(|| self.poster_actions(game, (width, height), cx).opacity(lift));
+
         let theme = cx.theme();
         let poster = div()
             .absolute()
@@ -1311,10 +1307,9 @@ const GROUP_NAMES: [&str; 3] = ["Played in the last week", "Played in the last m
 
 /// How much of a tile's width an icon (rather than cover art) takes up.
 const ICON_SHARE: f32 = 0.6;
-/// Glass buttons over a hovered poster: sizes, spacing and distance from its bottom.
-const GLASS_BUTTON: f32 = 36.;
-const GLASS_PLAY_BUTTON: f32 = 48.;
-const GLASS_GAP: f32 = 10.;
+/// Glass buttons over a hovered poster: sizes, and distance from its edges.
+const GLASS_BUTTON: f32 = 42.;
+const GLASS_PLAY_BUTTON: f32 = 56.;
 const GLASS_INSET: f32 = 14.;
 /// Space above and below the grid.
 const GRID_PADDING: f32 = 20.;
