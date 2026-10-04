@@ -253,6 +253,8 @@ struct MulchApp {
     confirm_remove: Option<String>,
     /// Each game's hover lift (0 resting, 1 lifted), eased over time.
     lifts: HashMap<String, Tween>,
+    /// Each poster button's height (0 resting, 1 hovered, 2 pressed), springing between them.
+    button_heights: HashMap<String, Tween>,
     /// Games being removed, fading out before they go.
     leaving: HashMap<String, Tween>,
     /// Each launcher's icon as a one-colour glyph (light ink, dark ink), for poster buttons.
@@ -298,6 +300,7 @@ impl MulchApp {
             scanning: false,
             confirm_remove: None,
             lifts: HashMap::new(),
+            button_heights: HashMap::new(),
             leaving: HashMap::new(),
             accents: HashMap::new(),
             glyphs: HashMap::new(),
@@ -435,6 +438,43 @@ impl MulchApp {
         cx.notify();
     }
 
+    /// A glass button whose height springs between resting, hovered and
+    /// pressed as the mouse moves over it and presses it.
+    #[allow(clippy::too_many_arguments)]
+    fn glass(
+        &self,
+        game_id: &str,
+        which: &'static str,
+        content: AnyElement,
+        size: f32,
+        danger: bool,
+        dark: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let key = format!("{game_id}/{which}");
+        let height = Tween::value(&self.button_heights, &key);
+        let (on_hover, on_down, on_up) = (key.clone(), key.clone(), key);
+        glass_button(which, content, size, danger, dark, height)
+            .on_hover(cx.listener(move |app, hovered: &bool, _, cx| {
+                Tween::spring_to(&mut app.button_heights, &on_hover, if *hovered { 1. } else { 0. }, BUTTON_SPRING);
+                cx.notify();
+            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |app, _, _, cx| {
+                    Tween::spring_to(&mut app.button_heights, &on_down, 2., BUTTON_PRESS_SPRING);
+                    cx.notify();
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(move |app, _, _, cx| {
+                    Tween::spring_to(&mut app.button_heights, &on_up, 1., BUTTON_SPRING);
+                    cx.notify();
+                }),
+            )
+    }
+
     /// Glass buttons over a hovered poster: Play, big, centred above the bottom row; along the bottom, Show in folder on the left
     /// and the game's other action on the right: Show in its launcher, or for
     /// games the user added, Remove (which asks again first).
@@ -443,12 +483,20 @@ impl MulchApp {
         let mut left: Option<AnyElement> = None;
         let mut right: Option<AnyElement> = None;
         if let Some(dir) = game.install_dir.clone() {
-            let button = glass_button("show-folder", IconName::FolderOpen, GLASS_BUTTON, false, dark).on_click(
-                cx.listener(move |app, _, _, cx| {
+            let button = self
+                .glass(
+                    &game.id,
+                    "show-folder",
+                    icon_content(IconName::FolderOpen, GLASS_BUTTON),
+                    GLASS_BUTTON,
+                    false,
+                    dark,
+                    cx,
+                )
+                .on_click(cx.listener(move |app, _, _, cx| {
                     app.action_clicked = true;
                     cx.open_with_system(&dir);
-                }),
-            );
+                }));
             left = Some(with_tooltip(button, "Show in folder").into_any_element());
         }
         if let Some(show) = game.show_in_launcher.clone() {
@@ -466,19 +514,28 @@ impl MulchApp {
                     .into_any_element(),
                 None => Icon::new(IconName::ExternalLink).size(px(GLASS_BUTTON * ICON_FILL)).into_any_element(),
             };
-            let button = glass_button_with("show-launcher", content, GLASS_BUTTON, false, dark).on_click(cx.listener(
-                move |app, _, window, cx| {
+            let button = self.glass(&game.id, "show-launcher", content, GLASS_BUTTON, false, dark, cx).on_click(
+                cx.listener(move |app, _, window, cx| {
                     app.action_clicked = true;
                     run_action(&show, &name, window, cx);
-                },
-            ));
+                }),
+            );
             right = Some(with_tooltip(button, format!("Show in {launcher}")).into_any_element());
         } else if let (Platform::Manual, Action::Exe { path, .. }) = (game.platform, &game.launch) {
             let exe = path.clone();
             let id = game.id.clone();
             let confirming = self.confirm_remove.as_deref() == Some(game.id.as_str());
-            let button = glass_button("remove", IconName::Close, GLASS_BUTTON, confirming, dark).on_click(cx.listener(
-                move |app, _, _, cx| {
+            let button = self
+                .glass(
+                    &game.id,
+                    "remove",
+                    icon_content(IconName::Close, GLASS_BUTTON),
+                    GLASS_BUTTON,
+                    confirming,
+                    dark,
+                    cx,
+                )
+                .on_click(cx.listener(move |app, _, _, cx| {
                     app.action_clicked = true;
                     if app.confirm_remove.as_deref() == Some(id.as_str()) {
                         app.confirm_remove = None;
@@ -487,8 +544,7 @@ impl MulchApp {
                         app.confirm_remove = Some(id.clone());
                         cx.notify();
                     }
-                },
-            ));
+                }));
             let tip = if confirming { "Click again to remove" } else { "Remove" };
             right = Some(with_tooltip(button, tip).into_any_element());
         }
@@ -499,12 +555,20 @@ impl MulchApp {
         let row = GLASS_INSET + GLASS_BUTTON + GLASS_PRESS_GROW;
         let (x, y) = (width / 2., (height - row) / 2.);
         let g = game.clone();
-        let play = glass_button("play", IconName::Play, GLASS_PLAY_BUTTON, false, dark).on_click(cx.listener(
-            move |app, _, window, cx| {
+        let play = self
+            .glass(
+                &game.id,
+                "play",
+                icon_content(IconName::Play, GLASS_PLAY_BUTTON),
+                GLASS_PLAY_BUTTON,
+                false,
+                dark,
+                cx,
+            )
+            .on_click(cx.listener(move |app, _, window, cx| {
                 app.action_clicked = true;
                 app.play(&g, window, cx);
-            },
-        ));
+            }));
         let play = with_tooltip(play, "Play").absolute().left(px(x - half)).top(px(y - half));
 
         div().absolute().top_0().left_0().size_full().child(play).child(
@@ -799,7 +863,7 @@ impl MulchApp {
             .map_or_else(|| cx.theme().colors, |(from, to, fade)| blend_colors(from, to, fade.now()));
         self.apply_theme(window, cx);
         let to = cx.theme().colors;
-        let fade = Tween { from: 0., to: 1., since: std::time::Instant::now(), duration: THEME_FADE };
+        let fade = Tween { from: 0., to: 1., since: std::time::Instant::now(), duration: THEME_FADE, spring: false };
         self.theme_fade = Some((from, to, fade));
         Theme::global_mut(cx).colors = from;
         cx.notify();
@@ -1001,7 +1065,7 @@ impl MulchApp {
                     if !*hovered && app.confirm_remove.as_deref() == Some(id.as_str()) {
                         app.confirm_remove = None;
                     }
-                    Tween::go(&mut app.lifts, &id, if *hovered { 1. } else { 0. }, LIFT_DURATION);
+                    Tween::spring_to(&mut app.lifts, &id, if *hovered { 1. } else { 0. }, LIFT_DURATION);
                     app.tilt = (0., 0.);
                     cx.notify();
                 })
@@ -1101,12 +1165,21 @@ struct Tween {
     to: f32,
     since: std::time::Instant,
     duration: std::time::Duration,
+    /// Springy (a gentle overshoot as it settles, like Apple's UI) rather than a plain ease-out.
+    spring: bool,
 }
 
 impl Tween {
     fn now(&self) -> f32 {
         let t = (self.since.elapsed().as_secs_f32() / self.duration.as_secs_f32()).min(1.);
-        self.from + (self.to - self.from) * ease_out_quint()(t)
+        let eased = if self.spring { spring(t) } else { ease_out_quint()(t) };
+        self.from + (self.to - self.from) * eased
+    }
+
+    /// Starts springing `id` toward `to` from wherever it is now.
+    fn spring_to(tweens: &mut HashMap<String, Tween>, id: &str, to: f32, duration: std::time::Duration) {
+        let from = Tween::value(tweens, id);
+        tweens.insert(id.to_string(), Tween { from, to, since: std::time::Instant::now(), duration, spring: true });
     }
 
     fn done(&self) -> bool {
@@ -1121,7 +1194,7 @@ impl Tween {
     /// Starts easing `id` toward `to` from wherever it is now.
     fn go(tweens: &mut HashMap<String, Tween>, id: &str, to: f32, duration: std::time::Duration) {
         let from = Tween::value(tweens, id);
-        tweens.insert(id.to_string(), Tween { from, to, since: std::time::Instant::now(), duration });
+        tweens.insert(id.to_string(), Tween { from, to, since: std::time::Instant::now(), duration, spring: false });
     }
 
     /// Whether any are still moving (keeps finished ones).
@@ -1134,6 +1207,12 @@ impl Tween {
         tweens.retain(|_, t| !(t.done() && t.to == 0.));
         tweens.values().any(|t| !t.done())
     }
+}
+
+/// A critically-damped-ish spring from 0 to 1 over `t` in 0..1: quick to
+/// start, overshooting by about 6% and settling, as Apple's animations do.
+fn spring(t: f32) -> f32 {
+    if t >= 1. { 1. } else { 1. - (-7. * t).exp() * (8. * t).cos() }
 }
 
 /// How long a theme change blends, and a removed game fades.
@@ -1198,7 +1277,7 @@ fn sheen(dx: f32, dy: f32) -> Div {
 
 /// How far a hovered poster lifts, and how quickly.
 const LIFT: f32 = 4.;
-const LIFT_DURATION: std::time::Duration = std::time::Duration::from_millis(180);
+const LIFT_DURATION: std::time::Duration = std::time::Duration::from_millis(520);
 /// Tiles' entrance: how far they rise, for how long, and the stagger between them.
 const ENTER_RISE: f32 = 12.;
 const ENTER_MS: f32 = 380.;
@@ -1406,13 +1485,18 @@ fn text_width(text: &str, window: &Window, cx: &App) -> f32 {
 
 /// A round glass button over a poster, in the theme's style: frosted white
 /// with a dark icon in light mode, dark glass with a white icon in dark mode.
-/// `danger` tints it red (a remove waiting to be confirmed).
-fn glass_button(id: &'static str, icon: IconName, size: f32, danger: bool, dark: bool) -> Stateful<Div> {
-    glass_button_with(id, Icon::new(icon).size(px(size * ICON_FILL)).into_any_element(), size, danger, dark)
-}
-
-/// A glass button around any content (e.g. a launcher's glyph).
-fn glass_button_with(id: &'static str, content: AnyElement, size: f32, danger: bool, dark: bool) -> Stateful<Div> {
+/// `danger` tints it red (a remove waiting to be confirmed). `height` is how
+/// raised it is: 0 resting just above the poster, 1 hovered, 2 pressed (and
+/// anything in between, as it springs). Its slot stays the pressed size, so
+/// nothing around it moves.
+fn glass_button(
+    id: &'static str,
+    content: AnyElement,
+    size: f32,
+    danger: bool,
+    dark: bool,
+    height: f32,
+) -> Stateful<Div> {
     let (glass, ink, edge) = if dark {
         // Frosted charcoal rather than clear black.
         (gpui_kit::hsla(240. / 360., 0.06, 0.16, 1.), gpui_kit::white(), gpui_kit::white().opacity(0.4))
@@ -1426,37 +1510,24 @@ fn glass_button_with(id: &'static str, content: AnyElement, size: f32, danger: b
     } else {
         (glass.opacity(0.7), glass.opacity(0.95), ink, gpui_kit::white().opacity(0.9))
     };
-    // The slot it sits in stays the grown size, so nothing around it moves.
-    let grown = size + GLASS_GROW;
-    let group: SharedString = format!("glass-{id}").into();
-    div().id(id).group(group.clone()).size(px(size + GLASS_PRESS_GROW)).flex().items_center().justify_center().child(
+    let raised = height.clamp(0., 1.);
+    let pressed = (height - 1.).max(0.);
+    let grow = GLASS_GROW * height.min(1.) + (GLASS_PRESS_GROW - GLASS_GROW) * pressed;
+    let lift = GLASS_LIFT * height.min(1.) + (GLASS_PRESS_LIFT - GLASS_LIFT) * pressed;
+    div().id(id).size(px(size + GLASS_PRESS_GROW)).flex().items_center().justify_center().child(
         div()
-            .id("dome")
             .relative()
-            .size(px(size))
+            .size(px(size + grow))
+            .top(px(-lift))
             .flex()
             .items_center()
             .justify_center()
             .rounded_full()
-            .bg(fill)
+            .bg(mix(fill, hover, raised))
             .border_1()
-            .border_color(edge)
-            .shadow(bevel(0, glow))
+            .border_color(mix(edge, gpui_kit::white().opacity(0.75), raised))
+            .shadow(bevel(height, glow))
             .text_color(ink)
-            // Hovered: it rises off the poster onto its own plane, grows,
-            // brightens and glows, its bevel and shadow deepening.
-            .group_hover(group.clone(), move |style| {
-                style
-                    .size(px(grown))
-                    .top(px(-GLASS_LIFT))
-                    .bg(hover)
-                    .border_color(gpui_kit::white().opacity(0.75))
-                    .shadow(bevel(1, glow))
-            })
-            // Pressed: higher still.
-            .group_active(group, move |style| {
-                style.size(px(size + GLASS_PRESS_GROW)).top(px(-GLASS_PRESS_LIFT)).shadow(bevel(2, glow))
-            })
             // Glassy: light catching the top of the dome.
             .child(div().absolute().top_0().left_0().size_full().rounded_full().bg(linear_gradient(
                 180.,
@@ -1465,6 +1536,18 @@ fn glass_button_with(id: &'static str, content: AnyElement, size: f32, danger: b
             )))
             .child(content),
     )
+}
+
+/// An icon sized for a glass button.
+fn icon_content(icon: IconName, size: f32) -> AnyElement {
+    Icon::new(icon).size(px(size * ICON_FILL)).into_any_element()
+}
+
+/// Colour part-way from `a` to `b` (`t` from 0 to 1, a little past for springs).
+fn mix(a: Hsla, b: Hsla, t: f32) -> Hsla {
+    let (a, b) = (Rgba::from(a), Rgba::from(b));
+    let m = |x: f32, y: f32| (x + (y - x) * t).clamp(0., 1.);
+    Hsla::from(Rgba { r: m(a.r, b.r), g: m(a.g, b.g), b: m(a.b, b.b), a: m(a.a, b.a) })
 }
 /// How much of a glass button its icon fills, and a launcher glyph (tight-cropped, so a touch less).
 const ICON_FILL: f32 = 0.54;
@@ -1475,6 +1558,9 @@ const GLASS_LIFT: f32 = 6.;
 /// Pressed, it rises further still.
 const GLASS_PRESS_LIFT: f32 = 12.;
 const GLASS_PRESS_GROW: f32 = 18.;
+/// How long a button takes to spring to hovered or resting, and to pressed.
+const BUTTON_SPRING: std::time::Duration = std::time::Duration::from_millis(480);
+const BUTTON_PRESS_SPRING: std::time::Duration = std::time::Duration::from_millis(340);
 /// The buttons' layer moves this much more than the poster as it tilts (parallax).
 const BUTTON_PARALLAX: f32 = 2.5;
 const GLYPH_FILL: f32 = 0.5;
@@ -1483,11 +1569,11 @@ const GLYPH_FILL: f32 = 0.5;
 const GLYPH_ON_DARK: [u8; 3] = [255, 255, 255];
 const GLYPH_ON_LIGHT: [u8; 3] = [40, 40, 40];
 
-/// A glass button's shadows by height: 0 floating just above the poster,
-/// 1 hovered (higher), 2 pressed (higher still). Each has a domed bevel
-/// (bright top edge, darker bottom) and a drop shadow that falls further
-/// and softer the higher it is, plus a glow once raised.
-fn bevel(level: u8, glow: Hsla) -> Vec<BoxShadow> {
+/// A glass button's shadows by height (0 resting just above the poster,
+/// 1 hovered, 2 pressed, blended in between): a domed bevel (bright top
+/// edge, darker bottom) and a drop shadow that falls further and softer the
+/// higher it is, plus a glow as it rises.
+fn bevel(height: f32, glow: Hsla) -> Vec<BoxShadow> {
     let shadow = |color: Hsla, y: f32, blur: f32, spread: f32, inset: bool| BoxShadow {
         color,
         offset: point(px(0.), px(y)),
@@ -1495,22 +1581,23 @@ fn bevel(level: u8, glow: Hsla) -> Vec<BoxShadow> {
         spread_radius: px(spread),
         inset,
     };
-    let (light, dark) = (gpui_kit::white(), gpui_kit::black());
-    let (far, near, top, bottom) = match level {
-        0 => ((8., 14., 0.4), (2., 4., 0.25), 0.4, 0.18),
-        1 => ((16., 24., 0.5), (5., 8., 0.3), 0.6, 0.28),
-        _ => ((26., 34., 0.55), (8., 12., 0.3), 0.7, 0.32),
-    };
-    let mut shadows = vec![
-        shadow(dark.opacity(far.2), far.0, far.1, -2., false),
-        shadow(dark.opacity(near.2), near.0, near.1, 0., false),
-        shadow(light.opacity(top), 2., 1., 0., true),
-        shadow(dark.opacity(bottom), -3., 4., 0., true),
+    // Per height: far shadow (offset, blur, opacity), near shadow, top light, bottom shade.
+    const LEVELS: [[f32; 8]; 3] = [
+        [8., 14., 0.4, 2., 4., 0.25, 0.4, 0.18],
+        [16., 24., 0.5, 5., 8., 0.3, 0.6, 0.28],
+        [26., 34., 0.55, 8., 12., 0.3, 0.7, 0.32],
     ];
-    if level > 0 {
-        shadows.push(shadow(glow, 0., 22., 1., false));
-    }
-    shadows
+    let h = height.clamp(0., 2.2);
+    let (lo, t) = if h <= 1. { (0, h) } else { (1, (h - 1.).min(1.2)) };
+    let v: Vec<f32> = (0..8).map(|i| LEVELS[lo][i] + (LEVELS[lo + 1][i] - LEVELS[lo][i]) * t).collect();
+    let (light, dark) = (gpui_kit::white(), gpui_kit::black());
+    vec![
+        shadow(dark.opacity(v[2]), v[0], v[1], -2., false),
+        shadow(dark.opacity(v[5]), v[3], v[4], 0., false),
+        shadow(light.opacity(v[6]), 2., 1., 0., true),
+        shadow(dark.opacity(v[7]), -3., 4., 0., true),
+        shadow(glow.opacity(h.min(1.)), 0., 22., 1., false),
+    ]
 }
 /// Adds a quick tooltip (after `TOOLTIP_DELAY`).
 fn with_tooltip(element: Stateful<Div>, text: impl Into<SharedString>) -> Stateful<Div> {
@@ -1558,7 +1645,7 @@ impl Render for MulchApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.update_min_width(window);
         self.step_theme_fade(window, cx);
-        if Tween::tidy(&mut self.lifts) | Tween::tidy_up(&mut self.leaving) {
+        if Tween::tidy(&mut self.lifts) | Tween::tidy(&mut self.button_heights) | Tween::tidy_up(&mut self.leaving) {
             window.request_animation_frame();
         }
         let viewport = window.viewport_size();
