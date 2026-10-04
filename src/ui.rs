@@ -512,12 +512,8 @@ impl MulchApp {
                 div()
                     .w(px(width))
                     .h(px(height))
-                    .rounded_lg()
                     .overflow_hidden()
                     .bg(theme.muted)
-                    .border_1()
-                    .border_color(theme.border)
-                    .hover(|style| style.border_color(theme.primary))
                     .child(artwork(game, width)),
             )
             .child(div().pt_2().text_sm().font_medium().truncate().child(game.name.clone()))
