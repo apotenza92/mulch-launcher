@@ -559,7 +559,7 @@ impl MulchApp {
             .glass(
                 &game.id,
                 "play",
-                icon_content(IconName::Play, GLASS_PLAY_BUTTON),
+                Icon::empty().path("mulch/play-filled.svg").size(px(GLASS_PLAY_BUTTON * ICON_FILL)).into_any_element(),
                 GLASS_PLAY_BUTTON,
                 false,
                 dark,
