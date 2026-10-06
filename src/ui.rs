@@ -1183,13 +1183,25 @@ impl MulchApp {
         let glow = match &game.art {
             Some(Art::Cover(path)) if lift > 0. => self.glows.get(path).map(|image| {
                 let reach = art::GLOW_PAD as f32 * width / art::GLOW_WIDTH as f32;
-                img(image.clone())
+                // Clipped a little inside the image's own edge: stretched, its outermost
+                // pixels can pick up a sliver of a neighbouring image and draw a line.
+                let inside = reach - GLOW_TRIM;
+                div()
                     .absolute()
-                    .top(px(-reach))
-                    .left(px(-reach))
-                    .w(px(width + 2. * reach))
-                    .h(px(height + 2. * reach))
-                    .opacity(GLOW_STRENGTH * lift.clamp(0., 1.))
+                    .top(px(-inside))
+                    .left(px(-inside))
+                    .w(px(width + 2. * inside))
+                    .h(px(height + 2. * inside))
+                    .overflow_hidden()
+                    .child(
+                        img(image.clone())
+                            .absolute()
+                            .top(px(-GLOW_TRIM))
+                            .left(px(-GLOW_TRIM))
+                            .w(px(width + 2. * reach))
+                            .h(px(height + 2. * reach))
+                            .opacity(GLOW_STRENGTH * lift.clamp(0., 1.)),
+                    )
             }),
             _ => None,
         };
@@ -1379,6 +1391,8 @@ const TILE_RADIUS: f32 = 8.;
 
 /// How strongly a hovered poster glows.
 const GLOW_STRENGTH: f32 = 0.9;
+/// How much of the glow image's outer edge is clipped off.
+const GLOW_TRIM: f32 = 4.;
 
 /// Every poster's drop shadow, so it stands off the background: subtle at
 /// rest, deeper and softer as it's hovered (`lift` 0 to 1).
