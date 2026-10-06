@@ -43,9 +43,8 @@ pub fn run(restore: Option<Restore>) {
             // it. The title is still set for the taskbar and Alt+Tab.
             titlebar: Some(TitlebarOptions { title: Some(APP_NAME.into()), ..TitleBar::title_bar_options() }),
             app_owns_titlebar_drag: true,
-            // Frosted glass: a system backdrop, switched to acrylic once the window
-            // exists (see update_min_width), so the desktop shows through, blurred.
-            window_background: WindowBackgroundAppearance::MicaBackdrop,
+            // Frosted glass: the desktop behind shows through, blurred.
+            window_background: WindowBackgroundAppearance::Blurred,
             window_bounds: Some(match restore {
                 Some(r) => {
                     let bounds = Bounds::new(point(px(r.x), px(r.y)), size(px(r.width), px(r.height)));
@@ -970,7 +969,7 @@ impl MulchApp {
             if let Ok(RawWindowHandle::Win32(handle)) = HasWindowHandle::window_handle(window).map(|h| h.as_raw()) {
                 let hwnd = handle.hwnd.get();
                 crate::window_size::install(hwnd);
-                crate::window_size::use_acrylic(hwnd);
+                crate::window_size::keep_glass_while_resizing(hwnd);
                 self.hwnd = Some(hwnd);
                 if let Some(restore) = self.restore.take() {
                     crate::window_size::show_behind_foreground(
