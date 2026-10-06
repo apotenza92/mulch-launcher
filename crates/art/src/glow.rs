@@ -24,7 +24,7 @@ pub fn glow(cover: &Path) -> Option<PathBuf> {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     cover.hash(&mut hasher);
     std::fs::metadata(cover).ok()?.modified().ok()?.hash(&mut hasher);
-    let out = dir.join(format!("{:016x}-glow1.png", hasher.finish()));
+    let out = dir.join(format!("{:016x}-glow2.png", hasher.finish()));
     if out.is_file() {
         return Some(out);
     }
@@ -51,11 +51,19 @@ fn make_glow(poster: &RgbaImage) -> RgbaImage {
         Luma([if inside { 255 } else { 0 }])
     });
     let fade = image::imageops::blur(&outline, GLOW_BLUR);
+    // Fully clear at the image's own edge: stretched over the screen, any
+    // colour left in its outermost pixels would show as a hard line.
+    let clear = |x: u32, y: u32| x < GLOW_CLEAR || y < GLOW_CLEAR || x >= w - GLOW_CLEAR || y >= h - GLOW_CLEAR;
     RgbaImage::from_fn(w, h, |x, y| {
+        if clear(x, y) {
+            return Rgba([0, 0, 0, 0]);
+        }
         let c = colours.get_pixel(x, y);
         Rgba([c[0], c[1], c[2], fade.get_pixel(x, y)[0]])
     })
 }
+/// How many pixels at the glow image's edge are left fully clear.
+const GLOW_CLEAR: u32 = 2;
 
 #[cfg(test)]
 mod tests {
@@ -73,8 +81,9 @@ mod tests {
         let right = glow.get_pixel(glow.width() - GLOW_PAD / 2, mid);
         assert!(left[0] > 150 && left[2] < 80, "left {left:?}");
         assert!(right[2] > 150 && right[0] < 80, "right {right:?}");
-        // Faint at the outer edge, solid well inside.
-        assert!(glow.get_pixel(0, mid)[3] < 60);
+        // Clear at the very edge, solid well inside.
+        assert_eq!(glow.get_pixel(0, mid)[3], 0);
+        assert_eq!(glow.get_pixel(glow.width() - 1, mid)[3], 0);
         assert_eq!(glow.get_pixel(glow.width() / 2, mid)[3], 255);
     }
 }
