@@ -2,7 +2,6 @@
 //! the left, buttons on the right) and every detected game as a tile, grouped
 //! by when it was last played and sized so they all fit if they can.
 
-use gpui_kit::component::button::*;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::spinner::Spinner;
@@ -256,6 +255,10 @@ struct MulchApp {
     add_panel: Option<AddPanel>,
     /// The native window, once known.
     hwnd: Option<isize>,
+    /// Launcher icons resampled to exactly their size on screen (by original),
+    /// and the display scale they were made for.
+    sized_icons: HashMap<PathBuf, PathBuf>,
+    icon_scale: f32,
     /// The game tile under the mouse, which shows its full name.
     hovered_tile: Option<usize>,
     scanning: bool,
@@ -319,6 +322,8 @@ impl MulchApp {
             settings: Settings::load(),
             theme_tip: Rc::default(),
             hwnd: None,
+            sized_icons: HashMap::new(),
+            icon_scale: 1.,
             hovered_tile: None,
             scanning: false,
             confirm_remove: None,
@@ -714,7 +719,40 @@ impl MulchApp {
             }
         }
         self.make_glyphs(cx);
+        self.size_icons(cx);
         cx.notify();
+    }
+
+    /// Resamples launcher icons to exactly their size on screen, in the
+    /// background (drawn scaled, they look soft and jagged).
+    fn size_icons(&mut self, cx: &mut Context<Self>) {
+        let size = (LAUNCHER_ICON * self.icon_scale).round() as u32;
+        let wanted: Vec<PathBuf> = self
+            .launchers
+            .iter()
+            .chain(&self.social)
+            .filter_map(|l| l.icon.clone())
+            .filter(|icon| !self.sized_icons.contains_key(icon))
+            .collect();
+        if wanted.is_empty() {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let made = cx
+                .background_spawn(async move {
+                    wanted
+                        .into_iter()
+                        .filter_map(|icon| Some((icon.clone(), art::sized(&icon, size)?)))
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            this.update(cx, |app, cx| {
+                app.sized_icons.extend(made);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Makes one-colour glyphs of the launchers' icons, in the background.
@@ -846,18 +884,15 @@ impl MulchApp {
             .into_any_element()
     }
 
-    /// The bar under the title bar, always showing: Add a game and the theme on
-    /// the left (the library re-checks itself), the launchers and chat apps in
-    /// the middle.
+    /// The bar under the title bar, always showing: the theme on the left,
+    /// the launchers and chat apps in the middle, Add a game on the right.
+    /// (The library re-checks itself.)
     fn toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
         let add = quick_tooltip(
             "add-game-tip",
             "Add game manually",
-            Button::new("add-game")
-                .ghost()
-                .small()
-                .icon(IconName::Plus)
-                .on_click(cx.listener(|app, _, _, cx| app.open_add_panel(cx))),
+            bar_button("add-game", Icon::new(IconName::Plus), cx)
+                .on_mouse_down(MouseButton::Left, cx.listener(|app, _, _, cx| app.open_add_panel(cx))),
         );
         let (theme_icon, theme_tip) = match self.settings.theme {
             ThemeChoice::System => (Icon::empty().path("mulch/monitor.svg"), "Theme: same as Windows"),
@@ -868,31 +903,23 @@ impl MulchApp {
         // click while still showing.
         self.theme_tip.set(theme_tip);
         let tip = self.theme_tip.clone();
-        let theme = div()
-            .id("theme-tip")
-            .child(
-                Button::new("theme")
-                    .ghost()
-                    .small()
-                    .icon(theme_icon)
-                    .on_click(cx.listener(|app, _, window, cx| app.cycle_theme(window, cx))),
-            )
+        let theme = bar_button("theme", theme_icon, cx)
+            .on_mouse_down(MouseButton::Left, cx.listener(|app, _, window, cx| app.cycle_theme(window, cx)))
             .tooltip(move |window, cx| {
                 let tip = tip.clone();
                 Tooltip::element(move |_, _| tip.get()).build(window, cx)
             })
             .tooltip_show_delay(TOOLTIP_DELAY);
-        // The buttons' column and an empty one as wide on the right keep the
-        // launchers centred in the window.
-        let side = || h_flex().w(px(TOOLBAR_SIDE)).flex_shrink_0().items_center().gap_1();
+        // Side columns of equal width keep the launchers centred in the window.
+        let side = || h_flex().w(px(LAUNCHER_SIZE)).flex_shrink_0().items_center();
         h_flex()
             .h(px(TOOLBAR_HEIGHT))
             .flex_shrink_0()
             .px(px(GRID_MARGIN_X))
             .items_center()
-            .child(side().child(add).child(theme))
+            .child(side().child(theme))
             .child(h_flex().flex_1().justify_center().child(self.launcher_row(cx)))
-            .child(side())
+            .child(side().justify_end().child(add))
             .into_any_element()
     }
     /// Applies the chosen theme (for "same as Windows", whichever Windows is using).
@@ -929,7 +956,14 @@ impl MulchApp {
     }
 
     /// Window sizing: a minimum width, and widths that snap to whole columns.
-    fn update_min_width(&mut self, window: &Window) {
+    fn update_min_width(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let scale = window.scale_factor();
+        if scale != self.icon_scale {
+            // A different display scale: make the icons again at the new size.
+            self.icon_scale = scale;
+            self.sized_icons.clear();
+            self.size_icons(cx);
+        }
         if self.hwnd.is_none() {
             if let Ok(RawWindowHandle::Win32(handle)) = HasWindowHandle::window_handle(window).map(|h| h.as_raw()) {
                 let hwnd = handle.hwnd.get();
@@ -1050,7 +1084,11 @@ impl MulchApp {
             .justify_center()
             .rounded_md()
             .hover(|style| style.bg(theme.list_hover))
-            .child(launcher_glyph(name, launcher.icon.clone(), theme.muted_foreground))
+            .child(launcher_glyph(
+                name,
+                launcher.icon.as_ref().map(|icon| self.sized_icons.get(icon).unwrap_or(icon).clone()),
+                theme.muted_foreground,
+            ))
             .tooltip(move |window, cx| Tooltip::new(format!("Open {name}")).build(window, cx))
             .tooltip_show_delay(TOOLTIP_DELAY)
             .on_mouse_down(MouseButton::Left, move |_, window, cx| run_action(&open, name, window, cx))
@@ -1281,10 +1319,27 @@ fn artwork(game: &Game, width: f32) -> AnyElement {
     }
 }
 
+/// A toolbar button the size of the launcher buttons, with an icon.
+fn bar_button(id: &'static str, icon: Icon, cx: &App) -> Stateful<Div> {
+    let theme = cx.theme();
+    div()
+        .id(id)
+        .size(px(LAUNCHER_SIZE))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_md()
+        .text_color(theme.foreground)
+        .hover(|style| style.bg(theme.list_hover))
+        .child(icon.size(px(BAR_ICON)))
+}
+/// A toolbar button's icon size.
+const BAR_ICON: f32 = 20.;
+
 /// The icon (or initials) for a launcher button.
 fn launcher_glyph(name: &str, icon: Option<PathBuf>, muted: Hsla) -> AnyElement {
     match icon {
-        Some(path) => img(path).size(px(LAUNCHER_SIZE - 10.)).object_fit(ObjectFit::Contain).into_any_element(),
+        Some(path) => img(path).size(px(LAUNCHER_ICON)).object_fit(ObjectFit::Contain).into_any_element(),
         None => div()
             .text_xs()
             .font_semibold()
@@ -1293,11 +1348,11 @@ fn launcher_glyph(name: &str, icon: Option<PathBuf>, muted: Hsla) -> AnyElement 
             .into_any_element(),
     }
 }
-/// A launcher button's size.
+/// A launcher button's size, and its icon's.
 const LAUNCHER_SIZE: f32 = 36.;
-/// The bar under the title bar, and its side columns (Add and Theme on the left).
+const LAUNCHER_ICON: f32 = 26.;
+/// The bar under the title bar.
 const TOOLBAR_HEIGHT: f32 = 48.;
-const TOOLBAR_SIDE: f32 = 80.;
 
 /// Tooltips show after this long (the UI kit's buttons wait half a second).
 const TOOLTIP_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
@@ -1514,7 +1569,7 @@ fn run_action(action: &Action, name: &str, window: &mut Window, cx: &mut App) {
 
 impl Render for MulchApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.update_min_width(window);
+        self.update_min_width(window, cx);
         let viewport = window.viewport_size();
         let layout = grid_layout(&self.recency_groups(), f32::from(viewport.width) - GRID_MARGIN_X * 2.);
         let title_bar = self.title_bar(cx);

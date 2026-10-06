@@ -61,6 +61,42 @@ pub fn fill_launchers(launchers: &mut [Launcher]) {
     }
 }
 
+/// A copy of an icon at exactly `size` × `size` pixels (fitted and centred,
+/// never stretched), cached. Shown at that size it's drawn pixel for pixel,
+/// instead of being scaled on screen, which looks blurry and jagged.
+pub fn sized(icon: &Path, size: u32) -> Option<PathBuf> {
+    let out = cache_dir()?.join(format!("{}-{size}px.png", cache_key(icon)?));
+    if out.is_file() {
+        return Some(out);
+    }
+    let image = image::open(icon).ok()?.to_rgba8();
+    let (w, h) = image.dimensions();
+    let scale = size as f32 / w.max(h) as f32;
+    let (fw, fh) = (((w as f32 * scale).round() as u32).max(1), ((h as f32 * scale).round() as u32).max(1));
+    // Scaled with its colours premultiplied by their opacity, so edges don't
+    // pick up dark fringes from the transparent pixels around them.
+    let mut premultiplied = image;
+    for p in premultiplied.pixels_mut() {
+        let a = p[3] as f32 / 255.;
+        for c in 0..3 {
+            p[c] = (p[c] as f32 * a).round() as u8;
+        }
+    }
+    let mut small = image::imageops::resize(&premultiplied, fw, fh, image::imageops::FilterType::Lanczos3);
+    for p in small.pixels_mut() {
+        let a = p[3] as f32 / 255.;
+        if a > 0. {
+            for c in 0..3 {
+                p[c] = (p[c] as f32 / a).round().min(255.) as u8;
+            }
+        }
+    }
+    let mut square = image::RgbaImage::new(size, size);
+    image::imageops::overlay(&mut square, &small, ((size - fw) / 2) as i64, ((size - fh) / 2) as i64);
+    square.save(&out).ok()?;
+    Some(out)
+}
+
 /// Cache key for a source file: its path and modification time, so an
 /// updated game or launcher gets fresh art.
 fn cache_key(source: &Path) -> Option<String> {
