@@ -969,7 +969,6 @@ impl MulchApp {
             if let Ok(RawWindowHandle::Win32(handle)) = HasWindowHandle::window_handle(window).map(|h| h.as_raw()) {
                 let hwnd = handle.hwnd.get();
                 crate::window_size::install(hwnd);
-                crate::window_size::keep_glass_while_resizing(hwnd);
                 self.hwnd = Some(hwnd);
                 if let Some(restore) = self.restore.take() {
                     crate::window_size::show_behind_foreground(
@@ -1801,42 +1800,54 @@ impl Render for MulchApp {
 
         let add_panel = self.add_panel.as_ref().map(|panel| self.add_panel(panel, cx));
 
-        v_flex().relative().size_full().children(add_panel).child(title_bar).child(title_buttons).child(
-            div()
-                .id("library")
-                .flex_1()
-                .overflow_y_scroll()
-                .pt(px(GRID_PADDING))
-                .pb(px(GRID_PADDING))
-                .px(px(GRID_MARGIN_X))
-                // Played in the last week, then the last month, then the rest.
-                // The grid is centred (exactly, given the window's snapped widths).
-                .flex()
-                .items_start()
-                .justify_center()
-                .when(empty, |this| {
-                    this.child(
+        // Frosted glass while windowed; maximised, a solid background in the
+        // glass's own tint (Windows drops the blur while animating to and from
+        // maximised anyway, so the solid look lines up with that).
+        let solid = window.is_maximized().then(|| with_alpha(cx.theme().background, 1.));
+
+        v_flex()
+            .relative()
+            .size_full()
+            .when_some(solid, |root, solid| root.bg(solid))
+            .children(add_panel)
+            .child(title_bar)
+            .child(title_buttons)
+            .child(
+                div()
+                    .id("library")
+                    .flex_1()
+                    .overflow_y_scroll()
+                    .pt(px(GRID_PADDING))
+                    .pb(px(GRID_PADDING))
+                    .px(px(GRID_MARGIN_X))
+                    // Played in the last week, then the last month, then the rest.
+                    // The grid is centred (exactly, given the window's snapped widths).
+                    .flex()
+                    .items_start()
+                    .justify_center()
+                    .when(empty, |this| {
+                        this.child(
+                            v_flex()
+                                .size_full()
+                                .items_center()
+                                .justify_center()
+                                .gap_2()
+                                .child(div().text_lg().child("No games found yet"))
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("Install a game with any launcher, or use Add game manually."),
+                                ),
+                        )
+                    })
+                    .child(
                         v_flex()
-                            .size_full()
-                            .items_center()
-                            .justify_center()
-                            .gap_2()
-                            .child(div().text_lg().child("No games found yet"))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child("Install a game with any launcher, or use Add game manually."),
-                            ),
-                    )
-                })
-                .child(
-                    v_flex()
-                        .flex_shrink_0()
-                        .w(px(grid_width(layout.columns, layout.tile_width)))
-                        .gap(px(GRID_GAP))
-                        .children(sections),
-                ),
-        )
+                            .flex_shrink_0()
+                            .w(px(grid_width(layout.columns, layout.tile_width)))
+                            .gap(px(GRID_GAP))
+                            .children(sections),
+                    ),
+            )
     }
 }

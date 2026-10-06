@@ -25,21 +25,6 @@ static SNAP_BASE: AtomicU32 = AtomicU32::new(0);
 static SNAP_STEP: AtomicU32 = AtomicU32::new(0);
 static SNAP_GAP: AtomicU32 = AtomicU32::new(0);
 
-/// Turns off Windows' maximise/restore/minimise animations for the window:
-/// Windows drops the frosted glass while it animates a window, so it would
-/// flash opaque; without the animation it never does.
-pub fn keep_glass_while_resizing(hwnd: isize) {
-    use windows::Win32::Graphics::Dwm::{DWMWA_TRANSITIONS_FORCEDISABLED, DwmSetWindowAttribute};
-    let disabled: i32 = 1; // a Win32 BOOL
-    unsafe {
-        let _ = DwmSetWindowAttribute(
-            HWND(hwnd as _),
-            DWMWA_TRANSITIONS_FORCEDISABLED,
-            &disabled as *const _ as *const _,
-            std::mem::size_of_val(&disabled) as u32,
-        );
-    }
-}
 /// Starts managing this window's width. Call once.
 pub fn install(hwnd: isize) {
     unsafe {
