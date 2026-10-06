@@ -1393,12 +1393,10 @@ fn glass_button(
     let raised = height.clamp(0., 1.);
     let pressed = (height - 1.).max(0.);
     let grow = GLASS_GROW * height.min(1.) + (GLASS_PRESS_GROW - GLASS_GROW) * pressed;
-    let lift = GLASS_LIFT * height.min(1.) + (GLASS_PRESS_LIFT - GLASS_LIFT) * pressed;
     div()
         .id(id)
         .relative()
         .size(px(size + grow))
-        .top(px(-lift))
         .flex()
         .items_center()
         .justify_center()
@@ -1438,10 +1436,7 @@ fn mix(a: Hsla, b: Hsla, t: f32) -> Hsla {
 const ICON_FILL: f32 = 0.54;
 /// How much a glass button grows when hovered.
 const GLASS_GROW: f32 = 12.;
-/// How far a hovered glass button rises.
-const GLASS_LIFT: f32 = 6.;
-/// Pressed, it rises further still.
-const GLASS_PRESS_LIFT: f32 = 12.;
+/// Pressed, it grows further still (always from its centre).
 const GLASS_PRESS_GROW: f32 = 18.;
 /// How long a button takes to spring to hovered or resting, and to pressed.
 const BUTTON_SPRING: std::time::Duration = std::time::Duration::from_millis(480);
