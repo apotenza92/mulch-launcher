@@ -25,6 +25,22 @@ static SNAP_BASE: AtomicU32 = AtomicU32::new(0);
 static SNAP_STEP: AtomicU32 = AtomicU32::new(0);
 static SNAP_GAP: AtomicU32 = AtomicU32::new(0);
 
+/// Frosted glass behind the window: Windows' own acrylic backdrop (the
+/// desktop behind shows through, blurred). Unlike the older blur gpui uses,
+/// it stays on while the window animates (maximising, restoring).
+pub fn use_acrylic(hwnd: isize) {
+    use windows::Win32::Graphics::Dwm::{DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DwmSetWindowAttribute};
+    let backdrop = DWMSBT_TRANSIENTWINDOW;
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            HWND(hwnd as _),
+            DWMWA_SYSTEMBACKDROP_TYPE,
+            &backdrop as *const _ as *const _,
+            std::mem::size_of_val(&backdrop) as u32,
+        );
+    }
+}
+
 /// Starts managing this window's width. Call once.
 pub fn install(hwnd: isize) {
     unsafe {

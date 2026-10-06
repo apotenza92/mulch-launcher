@@ -43,8 +43,9 @@ pub fn run(restore: Option<Restore>) {
             // it. The title is still set for the taskbar and Alt+Tab.
             titlebar: Some(TitlebarOptions { title: Some(APP_NAME.into()), ..TitleBar::title_bar_options() }),
             app_owns_titlebar_drag: true,
-            // Frosted glass: the desktop behind shows through, blurred.
-            window_background: WindowBackgroundAppearance::Blurred,
+            // Frosted glass: a system backdrop, switched to acrylic once the window
+            // exists (see update_min_width), so the desktop shows through, blurred.
+            window_background: WindowBackgroundAppearance::MicaBackdrop,
             window_bounds: Some(match restore {
                 Some(r) => {
                     let bounds = Bounds::new(point(px(r.x), px(r.y)), size(px(r.width), px(r.height)));
@@ -969,6 +970,7 @@ impl MulchApp {
             if let Ok(RawWindowHandle::Win32(handle)) = HasWindowHandle::window_handle(window).map(|h| h.as_raw()) {
                 let hwnd = handle.hwnd.get();
                 crate::window_size::install(hwnd);
+                crate::window_size::use_acrylic(hwnd);
                 self.hwnd = Some(hwnd);
                 if let Some(restore) = self.restore.take() {
                     crate::window_size::show_behind_foreground(
@@ -1103,7 +1105,6 @@ impl MulchApp {
         // How much the hovered poster grows on each side.
         let grow_x = width * HOVER_GROW * lift;
         let grow_y = grow_x * COVER_ASPECT;
-        let dark = cx.theme().mode.is_dark();
         // How far a hovered, cut-short name slides to show its end.
         let overflow = hovered
             .then(|| text_width(&game.name, window, cx) - width)
