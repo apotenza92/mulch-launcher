@@ -20,23 +20,19 @@ None.
 
 ## Search terms (7 max)
 
+No other products' names (Store policy 10.1.3).
+
 1. game launcher
 2. game library
-3. steam
-4. epic games
-5. gog
-6. xbox
-7. battle.net
-
-(If Partner Center objects to third-party names as search terms, swap 3-7 for: games, library, launcher, pc games, organiser.)
+3. launcher
+4. pc games
+5. games
+6. library
+7. organiser
 
 ## Category
 
-Recommended: **Utilities & tools** (subcategory: none, or "Other" if required).
-
-Reason: MulchLauncher isn't a game, it's a tool for starting games you already have. Listing it under Games puts it among games, gives it game-specific requirements in certification, and invites the review question of what game is being sold. Utilities & tools describes what it does.
-
-Alternative if you'd rather it be found by people browsing games: Entertainment. Avoid Games > any subcategory.
+Listed as a **game** (MSIX or PWA game): certification counts a game launcher as having game functionality (policy 10.1.21), so it must be in a game category.
 
 ## Pricing and availability
 

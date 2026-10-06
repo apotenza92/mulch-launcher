@@ -30,7 +30,7 @@ windows = "0.61"
 # finding games lives in the crates/ libraries.
 [package]
 name = "mulch-launcher"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "The low-maintenance game launcher: every installed game, from every platform, with zero setup."
 license = "MIT"

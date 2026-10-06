@@ -35,7 +35,7 @@ const REPO_URL: &str = "https://github.com/apotenza92/mulch-launcher";
 pub fn run(restore: Option<Restore>) {
     gpui_kit::application().with_assets(crate::assets::Assets).run(move |cx| {
         gpui_kit::init(cx);
-        Theme::change(ThemeMode::Dark, None, cx);
+        Theme::change(theme_mode(cx.window_appearance()), None, cx);
         finish_theme(cx);
 
         let options = WindowOptions {
@@ -74,7 +74,7 @@ pub fn run(restore: Option<Restore>) {
 pub fn run_installer() {
     gpui_kit::application().with_assets(crate::assets::Assets).run(move |cx| {
         gpui_kit::init(cx);
-        Theme::change(ThemeMode::Dark, None, cx);
+        Theme::change(theme_mode(cx.window_appearance()), None, cx);
         finish_theme(cx);
         let options = WindowOptions {
             titlebar: Some(TitlebarOptions { title: Some(APP_NAME.into()), ..TitleBar::title_bar_options() }),
@@ -286,6 +286,8 @@ struct MulchApp {
     action_clicked: bool,
     /// When each game was last played, for sorting most recent first.
     history: History,
+    /// A light/dark switch in progress: from, to, and the blend.
+    theme_fade: Option<(ThemeColor, ThemeColor, Tween)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -319,6 +321,7 @@ impl MulchApp {
             launchers: Vec::new(),
             social: Vec::new(),
             add_panel: None,
+            theme_fade: None,
             hwnd: None,
             hovered_tile: None,
             scanning: false,
@@ -337,18 +340,22 @@ impl MulchApp {
             history: History::load(),
             // Coming back to the window (e.g. after playing): re-sort so the
             // game just played is first.
-            _subscriptions: vec![cx.observe_window_activation(window, |app, window, cx| {
-                app.active = window.is_window_active();
-                // An update waiting: restart as soon as the user moves on.
-                if !app.active && app.update_ready {
-                    app.restart_for_update(window, cx);
-                    return;
-                }
-                if app.active {
-                    app.resort(cx);
-                    app.check_for_changes(cx);
-                }
-            })],
+            _subscriptions: vec![
+                // Follow Windows switching between light and dark.
+                cx.observe_window_appearance(window, |app, window, cx| app.fade_theme(window, cx)),
+                cx.observe_window_activation(window, |app, window, cx| {
+                    app.active = window.is_window_active();
+                    // An update waiting: restart as soon as the user moves on.
+                    if !app.active && app.update_ready {
+                        app.restart_for_update(window, cx);
+                        return;
+                    }
+                    if app.active {
+                        app.resort(cx);
+                        app.check_for_changes(cx);
+                    }
+                }),
+            ],
         };
         app.apply_theme(window, cx);
         app.rescan(cx);
@@ -910,10 +917,38 @@ impl MulchApp {
         // A full-width layer, so the GitHub button can sit against the right edge.
         div().absolute().top_0().left_0().w_full().h(px(TITLE_BAR_HEIGHT)).child(left).child(github).into_any_element()
     }
-    /// Applies the app's dark theme.
+    /// Applies Windows' light or dark mode.
     fn apply_theme(&self, window: &mut Window, cx: &mut Context<Self>) {
-        Theme::change(ThemeMode::Dark, Some(window), cx);
+        Theme::change(theme_mode(window.appearance()), Some(window), cx);
         finish_theme(cx);
+    }
+
+    /// Switches to Windows' current light or dark mode, blending the colours over a moment.
+    fn fade_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let from = self
+            .theme_fade
+            .as_ref()
+            .map_or_else(|| cx.theme().colors, |(from, to, fade)| blend_colors(from, to, fade.now()));
+        self.apply_theme(window, cx);
+        let to = cx.theme().colors;
+        let fade = Tween { from: 0., to: 1., since: std::time::Instant::now(), duration: THEME_FADE, spring: false };
+        self.theme_fade = Some((from, to, fade));
+        Theme::global_mut(cx).colors = from;
+        cx.notify();
+    }
+
+    /// Steps a theme fade on (each frame while one is running).
+    fn step_theme_fade(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((from, to, fade)) = self.theme_fade else { return };
+        let colors = if fade.done() { to } else { blend_colors(&from, &to, fade.now()) };
+        let theme = Theme::global_mut(cx);
+        theme.colors = colors;
+        theme.tokens.background = colors.background.into();
+        if fade.done() {
+            self.theme_fade = None;
+        } else {
+            window.request_animation_frame();
+        }
     }
 
     /// How many games were played in the last week, the last month (but not
@@ -1222,7 +1257,8 @@ fn spring(t: f32) -> f32 {
     if t >= 1. { 1. } else { 1. - (-7. * t).exp() * (8. * t).cos() }
 }
 
-/// How long a removed game fades.
+/// How long a theme change blends, and a removed game fades.
+const THEME_FADE: std::time::Duration = std::time::Duration::from_millis(320);
 const LEAVE_DURATION: std::time::Duration = std::time::Duration::from_millis(260);
 /// How long after games first appear that tiles still enter one by one.
 const STAGGER_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
@@ -1305,6 +1341,48 @@ fn finish_theme(cx: &mut App) {
 /// color at exactly lpha (gpui's opacity multiplies the existing alpha instead).
 fn with_alpha(color: Hsla, alpha: f32) -> Hsla {
     Hsla { a: alpha, ..color }
+}
+
+/// Theme colours part-way between two themes (`t` from 0 to 1).
+fn blend_colors(from: &ThemeColor, to: &ThemeColor, t: f32) -> ThemeColor {
+    let mix = |a: Hsla, b: Hsla| {
+        let (a, b) = (Rgba::from(a), Rgba::from(b));
+        let m = |x: f32, y: f32| x + (y - x) * t;
+        Hsla::from(Rgba { r: m(a.r, b.r), g: m(a.g, b.g), b: m(a.b, b.b), a: m(a.a, b.a) })
+    };
+    let mut out = *to;
+    macro_rules! blend { ($($field:ident),*) => { $(out.$field = mix(from.$field, to.$field);)* } }
+    blend!(
+        background,
+        foreground,
+        muted,
+        muted_foreground,
+        popover,
+        popover_foreground,
+        border,
+        list_hover,
+        title_bar,
+        primary,
+        primary_foreground,
+        primary_hover,
+        secondary,
+        secondary_foreground,
+        secondary_hover,
+        accent,
+        accent_foreground,
+        danger,
+        ring,
+        input
+    );
+    out
+}
+
+/// Light or dark, following Windows.
+fn theme_mode(windows: WindowAppearance) -> ThemeMode {
+    match windows {
+        WindowAppearance::Dark | WindowAppearance::VibrantDark => ThemeMode::Dark,
+        _ => ThemeMode::Light,
+    }
 }
 
 /// Opening size, at the tile size: exactly 6 games across, and tall
@@ -1629,6 +1707,7 @@ fn run_action(action: &Action, name: &str, window: &mut Window, cx: &mut App) {
 impl Render for MulchApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.update_min_width(window);
+        self.step_theme_fade(window, cx);
         if Tween::tidy(&mut self.lifts) | Tween::tidy(&mut self.button_heights) | Tween::tidy_up(&mut self.leaving) {
             window.request_animation_frame();
         }
