@@ -21,9 +21,7 @@ impl Library for Ubisoft {
         Some(Launcher::from_exe(Platform::Ubisoft, "Ubisoft Connect", exe))
     }
 
-    fn games(&self, cx: &ScanContext) -> Vec<Game> {
-        // Ubisoft has no documented link to a game's page, so "show" opens the app.
-        let show = self.launcher(cx).map(|l| l.open);
+    fn games(&self, _: &ScanContext) -> Vec<Game> {
         let mut games = Vec::new();
         for game_id in registry::subkeys(HKEY_LOCAL_MACHINE, INSTALLS) {
             let Some(raw_dir) = registry::string(HKEY_LOCAL_MACHINE, &format!(r"{INSTALLS}\{game_id}"), "InstallDir")
@@ -47,7 +45,8 @@ impl Library for Ubisoft {
                 Some(install_dir),
                 Action::Uri(format!("uplay://launch/{game_id}/0")),
             );
-            game.show_in_launcher = show.clone();
+            // Opens the game's own page in Ubisoft Connect.
+            game.show_in_launcher = Some(Action::Uri(format!("uplay://open/game/{game_id}")));
             game.icon_source = registry::string(HKEY_LOCAL_MACHINE, &uninstall_key, "DisplayIcon")
                 .and_then(|icon| registry::icon_path(&icon));
             games.push(game);
