@@ -1399,13 +1399,13 @@ const GLOW_TRIM: f32 = 4.;
 fn cast_shadow(lift: f32, dark: bool) -> Vec<BoxShadow> {
     let lit = lift.clamp(0., 1.);
     let between = |rest: f32, hovered: f32| rest + (hovered - rest) * lit;
-    let (rest, hovered) = if dark { (0.45, 0.7) } else { (0.16, 0.32) };
+    let (rest, hovered) = if dark { (0.35, 0.5) } else { (0.12, 0.2) };
     vec![BoxShadow {
         color: gpui_kit::black().opacity(between(rest, hovered)),
         // Kept within the gap between posters, so it never falls across a neighbour.
-        offset: point(px(0.), px(between(4., 8.))),
-        blur_radius: px(between(12., 18.)),
-        spread_radius: px(between(-2., -5.)),
+        offset: point(px(0.), px(between(3., 5.))),
+        blur_radius: px(between(8., 12.)),
+        spread_radius: px(between(-2., -3.)),
         inset: false,
     }]
 }
