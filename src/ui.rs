@@ -35,17 +35,15 @@ const REPO_URL: &str = "https://github.com/apotenza92/mulch-launcher";
 pub fn run(restore: Option<Restore>) {
     gpui_kit::application().with_assets(crate::assets::Assets).run(move |cx| {
         gpui_kit::init(cx);
-        Theme::change(theme_mode(cx.window_appearance()), None, cx);
-        make_glassy(cx);
+        Theme::change(ThemeMode::Dark, None, cx);
+        finish_theme(cx);
 
         let options = WindowOptions {
             // Our own slim title bar (see `title_bar`), with the toolbar under
             // it. The title is still set for the taskbar and Alt+Tab.
             titlebar: Some(TitlebarOptions { title: Some(APP_NAME.into()), ..TitleBar::title_bar_options() }),
             app_owns_titlebar_drag: true,
-            // Frosted glass: the desktop behind shows through, blurred, under a
-            // milky tint (see make_glassy).
-            window_background: WindowBackgroundAppearance::Blurred,
+            window_background: WindowBackgroundAppearance::Opaque,
             window_bounds: Some(match restore {
                 Some(r) => {
                     let bounds = Bounds::new(point(px(r.x), px(r.y)), size(px(r.width), px(r.height)));
@@ -76,13 +74,12 @@ pub fn run(restore: Option<Restore>) {
 pub fn run_installer() {
     gpui_kit::application().with_assets(crate::assets::Assets).run(move |cx| {
         gpui_kit::init(cx);
-        Theme::change(theme_mode(cx.window_appearance()), None, cx);
-        make_glassy(cx);
+        Theme::change(ThemeMode::Dark, None, cx);
+        finish_theme(cx);
         let options = WindowOptions {
             titlebar: Some(TitlebarOptions { title: Some(APP_NAME.into()), ..TitleBar::title_bar_options() }),
             app_owns_titlebar_drag: true,
-            // Frosted glass: the desktop behind shows through, blurred.
-            window_background: WindowBackgroundAppearance::Blurred,
+            window_background: WindowBackgroundAppearance::Opaque,
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                 None,
                 size(px(INSTALLER_WIDTH), px(INSTALLER_HEIGHT)),
@@ -282,8 +279,6 @@ struct MulchApp {
     leaving: HashMap<String, Tween>,
     /// Each launcher's icon as a one-colour glyph (light ink, dark ink), for poster buttons.
     glyphs: HashMap<Platform, (PathBuf, PathBuf)>,
-    /// A theme change in progress: the colours it's blending from and to.
-    theme_fade: Option<(ThemeColor, ThemeColor, Tween)>,
     /// When games first appeared: until shortly after, tiles enter one after
     /// another; later additions just fade straight in.
     first_shown: Option<std::time::Instant>,
@@ -337,28 +332,23 @@ impl MulchApp {
             button_heights: HashMap::new(),
             leaving: HashMap::new(),
             glyphs: HashMap::new(),
-            theme_fade: None,
             first_shown: None,
             action_clicked: false,
             history: History::load(),
             // Coming back to the window (e.g. after playing): re-sort so the
             // game just played is first.
-            _subscriptions: vec![
-                // Follow Windows switching between light and dark.
-                cx.observe_window_appearance(window, |app, window, cx| app.fade_theme(window, cx)),
-                cx.observe_window_activation(window, |app, window, cx| {
-                    app.active = window.is_window_active();
-                    // An update waiting: restart as soon as the user moves on.
-                    if !app.active && app.update_ready {
-                        app.restart_for_update(window, cx);
-                        return;
-                    }
-                    if app.active {
-                        app.resort(cx);
-                        app.check_for_changes(cx);
-                    }
-                }),
-            ],
+            _subscriptions: vec![cx.observe_window_activation(window, |app, window, cx| {
+                app.active = window.is_window_active();
+                // An update waiting: restart as soon as the user moves on.
+                if !app.active && app.update_ready {
+                    app.restart_for_update(window, cx);
+                    return;
+                }
+                if app.active {
+                    app.resort(cx);
+                    app.check_for_changes(cx);
+                }
+            })],
         };
         app.apply_theme(window, cx);
         app.rescan(cx);
@@ -911,38 +901,10 @@ impl MulchApp {
         // A full-width layer, so the GitHub button can sit against the right edge.
         div().absolute().top_0().left_0().w_full().h(px(TITLE_BAR_HEIGHT)).child(left).child(github).into_any_element()
     }
-    /// Applies Windows' light or dark mode.
+    /// Applies the app's dark theme.
     fn apply_theme(&self, window: &mut Window, cx: &mut Context<Self>) {
-        Theme::change(theme_mode(window.appearance()), Some(window), cx);
-        make_glassy(cx);
-    }
-
-    /// Switches to Windows' current light or dark mode, blending the colours over a moment.
-    fn fade_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let from = self
-            .theme_fade
-            .as_ref()
-            .map_or_else(|| cx.theme().colors, |(from, to, fade)| blend_colors(from, to, fade.now()));
-        self.apply_theme(window, cx);
-        let to = cx.theme().colors;
-        let fade = Tween { from: 0., to: 1., since: std::time::Instant::now(), duration: THEME_FADE, spring: false };
-        self.theme_fade = Some((from, to, fade));
-        Theme::global_mut(cx).colors = from;
-        cx.notify();
-    }
-
-    /// Steps a theme fade on (each frame while one is running).
-    fn step_theme_fade(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((from, to, fade)) = self.theme_fade else { return };
-        let colors = if fade.done() { to } else { blend_colors(&from, &to, fade.now()) };
-        let theme = Theme::global_mut(cx);
-        theme.colors = colors;
-        theme.tokens.background = colors.background.into();
-        if fade.done() {
-            self.theme_fade = None;
-        } else {
-            window.request_animation_frame();
-        }
+        Theme::change(ThemeMode::Dark, Some(window), cx);
+        finish_theme(cx);
     }
 
     /// How many games were played in the last week, the last month (but not
@@ -1251,45 +1213,10 @@ fn spring(t: f32) -> f32 {
     if t >= 1. { 1. } else { 1. - (-7. * t).exp() * (8. * t).cos() }
 }
 
-/// How long a theme change blends, and a removed game fades.
-const THEME_FADE: std::time::Duration = std::time::Duration::from_millis(320);
+/// How long a removed game fades.
 const LEAVE_DURATION: std::time::Duration = std::time::Duration::from_millis(260);
 /// How long after games first appear that tiles still enter one by one.
 const STAGGER_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
-
-/// Theme colours part-way between two themes (`t` from 0 to 1).
-fn blend_colors(from: &ThemeColor, to: &ThemeColor, t: f32) -> ThemeColor {
-    let mix = |a: Hsla, b: Hsla| {
-        let (a, b) = (Rgba::from(a), Rgba::from(b));
-        let m = |x: f32, y: f32| x + (y - x) * t;
-        Hsla::from(Rgba { r: m(a.r, b.r), g: m(a.g, b.g), b: m(a.b, b.b), a: m(a.a, b.a) })
-    };
-    let mut out = *to;
-    macro_rules! blend { ($($field:ident),*) => { $(out.$field = mix(from.$field, to.$field);)* } }
-    blend!(
-        background,
-        foreground,
-        muted,
-        muted_foreground,
-        popover,
-        popover_foreground,
-        border,
-        list_hover,
-        title_bar,
-        primary,
-        primary_foreground,
-        primary_hover,
-        secondary,
-        secondary_foreground,
-        secondary_hover,
-        accent,
-        accent_foreground,
-        danger,
-        ring,
-        input
-    );
-    out
-}
 
 /// Corner rounding for posters, panels and cards.
 const TILE_RADIUS: f32 = 8.;
@@ -1361,80 +1288,14 @@ const MIN_WINDOW_WIDTH: f32 = 480.;
 /// Minimise, maximise and close, on the right of the title bar, less its left padding.
 const WINDOW_CONTROLS_WIDTH: f32 = 3. * 34. - 12.;
 
-/// Makes the theme see-through, for the window's frosted-glass backdrop.
-///
-/// The glass sits over whatever is behind the window, so its tint is worked
-/// out against the worst case (a white desktop behind dark glass, black
-/// behind light): just strong enough that text keeps at least 7:1 contrast
-/// and secondary text at least 4.5:1 (WCAG AAA and AA), whatever is behind.
-/// Menus are worked out the same way.
-fn make_glassy(cx: &mut App) {
-    let theme = Theme::global_mut(cx);
-    let worst = if theme.mode.is_dark() { gpui_kit::white() } else { gpui_kit::black() };
-    let foreground = theme.colors.foreground;
-
-    let tint = with_alpha(theme.colors.background, 1.);
-    let alpha = GLASS_TINT;
-    let background = tint.opacity(alpha);
-    theme.colors.background = background;
-    theme.tokens.background = background.into();
-    theme.colors.title_bar = gpui_kit::transparent_black();
-    theme.colors.muted_foreground = secondary_text(foreground, tint, over(tint, alpha, worst));
-
-    let popover = with_alpha(theme.colors.popover, 1.);
-    theme.colors.popover = popover.opacity(glass_alpha(foreground, popover, worst, TEXT_CONTRAST));
+/// The app's own touches on the theme: the title bar shows the window's background.
+fn finish_theme(cx: &mut App) {
+    Theme::global_mut(cx).colors.title_bar = gpui_kit::transparent_black();
 }
 
 /// color at exactly lpha (gpui's opacity multiplies the existing alpha instead).
 fn with_alpha(color: Hsla, alpha: f32) -> Hsla {
     Hsla { a: alpha, ..color }
-}
-
-/// How opaque the window's tint is over the blurred desktop.
-const GLASS_TINT: f32 = 0.5;
-/// Body text contrast (WCAG AAA), and secondary text (AA).
-const TEXT_CONTRAST: f32 = 7.;
-const SECONDARY_CONTRAST: f32 = 4.5;
-
-/// The least opacity for `tint` over `backdrop` that keeps `text` at `ratio`.
-fn glass_alpha(text: Hsla, tint: Hsla, backdrop: Hsla, ratio: f32) -> f32 {
-    (0..=100).map(|step| step as f32 / 100.).find(|&a| contrast(text, over(tint, a, backdrop)) >= ratio).unwrap_or(1.)
-}
-
-/// Secondary text: as far from `text` toward `tint` as still keeps AA contrast
-/// against `background`.
-fn secondary_text(text: Hsla, tint: Hsla, background: Hsla) -> Hsla {
-    (0..=60)
-        .rev()
-        .map(|step| step as f32 / 100.)
-        .map(|m| over(tint, m, text))
-        .find(|&c| contrast(c, background) >= SECONDARY_CONTRAST)
-        .unwrap_or(text)
-}
-
-/// `top` at `alpha` over `bottom`, as an opaque colour.
-fn over(top: Hsla, alpha: f32, bottom: Hsla) -> Hsla {
-    let (t, b) = (Rgba::from(top), Rgba::from(bottom));
-    let mix = |x: f32, y: f32| x * alpha + y * (1. - alpha);
-    Hsla::from(Rgba { r: mix(t.r, b.r), g: mix(t.g, b.g), b: mix(t.b, b.b), a: 1. })
-}
-
-/// WCAG contrast ratio between two opaque colours.
-fn contrast(a: Hsla, b: Hsla) -> f32 {
-    let luminance = |c: Hsla| {
-        let c = Rgba::from(c);
-        let linear = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
-        0.2126 * linear(c.r) + 0.7152 * linear(c.g) + 0.0722 * linear(c.b)
-    };
-    let (la, lb) = (luminance(a), luminance(b));
-    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
-}
-/// Light or dark, following Windows.
-fn theme_mode(windows: WindowAppearance) -> ThemeMode {
-    match windows {
-        WindowAppearance::Dark | WindowAppearance::VibrantDark => ThemeMode::Dark,
-        _ => ThemeMode::Light,
-    }
 }
 
 /// Opening size, at the tile size: exactly 6 games across, and tall
@@ -1763,7 +1624,6 @@ fn run_action(action: &Action, name: &str, window: &mut Window, cx: &mut App) {
 impl Render for MulchApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.update_min_width(window);
-        self.step_theme_fade(window, cx);
         if Tween::tidy(&mut self.lifts) | Tween::tidy(&mut self.button_heights) | Tween::tidy_up(&mut self.leaving) {
             window.request_animation_frame();
         }
@@ -1803,54 +1663,42 @@ impl Render for MulchApp {
 
         let add_panel = self.add_panel.as_ref().map(|panel| self.add_panel(panel, cx));
 
-        // Frosted glass while windowed; maximised, a solid background in the
-        // glass's own tint (Windows drops the blur while animating to and from
-        // maximised anyway, so the solid look lines up with that).
-        let solid = window.is_maximized().then(|| with_alpha(cx.theme().background, 1.));
-
-        v_flex()
-            .relative()
-            .size_full()
-            .when_some(solid, |root, solid| root.bg(solid))
-            .children(add_panel)
-            .child(title_bar)
-            .child(title_buttons)
-            .child(
-                div()
-                    .id("library")
-                    .flex_1()
-                    .overflow_y_scroll()
-                    .pt(px(GRID_PADDING))
-                    .pb(px(GRID_PADDING))
-                    .px(px(GRID_MARGIN_X))
-                    // Played in the last week, then the last month, then the rest.
-                    // The grid is centred (exactly, given the window's snapped widths).
-                    .flex()
-                    .items_start()
-                    .justify_center()
-                    .when(empty, |this| {
-                        this.child(
-                            v_flex()
-                                .size_full()
-                                .items_center()
-                                .justify_center()
-                                .gap_2()
-                                .child(div().text_lg().child("No games found yet"))
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child("Install a game with any launcher, or use Add game manually."),
-                                ),
-                        )
-                    })
-                    .child(
+        v_flex().relative().size_full().children(add_panel).child(title_bar).child(title_buttons).child(
+            div()
+                .id("library")
+                .flex_1()
+                .overflow_y_scroll()
+                .pt(px(GRID_PADDING))
+                .pb(px(GRID_PADDING))
+                .px(px(GRID_MARGIN_X))
+                // Played in the last week, then the last month, then the rest.
+                // The grid is centred (exactly, given the window's snapped widths).
+                .flex()
+                .items_start()
+                .justify_center()
+                .when(empty, |this| {
+                    this.child(
                         v_flex()
-                            .flex_shrink_0()
-                            .w(px(grid_width(layout.columns, layout.tile_width)))
-                            .gap(px(GRID_GAP))
-                            .children(sections),
-                    ),
-            )
+                            .size_full()
+                            .items_center()
+                            .justify_center()
+                            .gap_2()
+                            .child(div().text_lg().child("No games found yet"))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("Install a game with any launcher, or use Add game manually."),
+                            ),
+                    )
+                })
+                .child(
+                    v_flex()
+                        .flex_shrink_0()
+                        .w(px(grid_width(layout.columns, layout.tile_width)))
+                        .gap(px(GRID_GAP))
+                        .children(sections),
+                ),
+        )
     }
 }
