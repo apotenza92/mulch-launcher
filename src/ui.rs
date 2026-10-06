@@ -846,10 +846,10 @@ impl MulchApp {
             .into_any_element()
     }
 
-    /// Add a game and the theme, in the title bar's left corner. (The library
-    /// re-checks itself.) Drawn on a layer above the title
-    /// bar, which claims its own clicks (the title bar is the drag area).
-    fn title_buttons(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// The bar under the title bar, always showing: Add a game and the theme on
+    /// the left (the library re-checks itself), the launchers and chat apps in
+    /// the middle.
+    fn toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
         let add = quick_tooltip(
             "add-game-tip",
             "Add game manually",
@@ -882,20 +882,18 @@ impl MulchApp {
                 Tooltip::element(move |_, _| tip.get()).build(window, cx)
             })
             .tooltip_show_delay(TOOLTIP_DELAY);
-        let left = deferred(
-            h_flex()
-                .id("title-buttons")
-                .occlude()
-                .absolute()
-                .top_0()
-                .left(px(TITLE_BUTTONS_INSET))
-                .h(px(TITLE_BAR_HEIGHT))
-                .items_center()
-                .gap_1()
-                .child(add)
-                .child(theme),
-        );
-        left.into_any_element()
+        // The buttons' column and an empty one as wide on the right keep the
+        // launchers centred in the window.
+        let side = || h_flex().w(px(TOOLBAR_SIDE)).flex_shrink_0().items_center().gap_1();
+        h_flex()
+            .h(px(TOOLBAR_HEIGHT))
+            .flex_shrink_0()
+            .px(px(GRID_MARGIN_X))
+            .items_center()
+            .child(side().child(add).child(theme))
+            .child(h_flex().flex_1().justify_center().child(self.launcher_row(cx)))
+            .child(side())
+            .into_any_element()
     }
     /// Applies the chosen theme (for "same as Windows", whichever Windows is using).
     fn apply_theme(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1039,6 +1037,42 @@ impl MulchApp {
         .with_priority(4)
         .into_any_element()
     }
+    /// A launcher's (or chat app's) button: its icon; clicking opens it.
+    fn launcher_icon(&self, id: (&'static str, usize), launcher: &Launcher, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let name = launcher.name;
+        let open = launcher.open.clone();
+        div()
+            .id(id)
+            .size(px(LAUNCHER_SIZE))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_md()
+            .hover(|style| style.bg(theme.list_hover))
+            .child(launcher_glyph(name, launcher.icon.clone(), theme.muted_foreground))
+            .tooltip(move |window, cx| Tooltip::new(format!("Open {name}")).build(window, cx))
+            .tooltip_show_delay(TOOLTIP_DELAY)
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| run_action(&open, name, window, cx))
+            .into_any_element()
+    }
+
+    /// The launchers (most games first, ties A to Z), then chat apps, in a
+    /// centred row at the top of the game list.
+    fn launcher_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let launchers = self.launchers.iter().enumerate().map(|(ix, l)| self.launcher_icon(("launcher", ix), l, cx));
+        let launchers: Vec<AnyElement> = launchers.collect();
+        let social: Vec<AnyElement> =
+            self.social.iter().enumerate().map(|(ix, app)| self.launcher_icon(("social", ix), app, cx)).collect();
+        h_flex()
+            .justify_center()
+            .gap_1()
+            .children(launchers)
+            .when(!social.is_empty(), |row| row.child(div().w(px(LAUNCHER_SIZE / 2.))))
+            .children(social)
+            .into_any_element()
+    }
+
     fn tile(&self, ix: usize, game: &Game, layout: &GridLayout, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let (width, height) = (layout.tile_width, layout.tile_width * COVER_ASPECT);
 
@@ -1177,8 +1211,6 @@ const GRID_PADDING: f32 = 20.;
 const GRID_MARGIN_X: f32 = 24.;
 /// The title bar's height.
 const TITLE_BAR_HEIGHT: f32 = 34.;
-/// How far the title bar's buttons sit from the window's left edge.
-const TITLE_BUTTONS_INSET: f32 = 8.;
 /// The window is never narrower than this.
 const MIN_WINDOW_WIDTH: f32 = 480.;
 /// Minimise, maximise and close, on the right of the title bar, less its left padding.
@@ -1216,8 +1248,12 @@ fn default_window_size(cx: &App) -> gpui_kit::Size<Pixels> {
     const GROUPS: f32 = 3.;
     let width = GRID_MARGIN_X * 2. + grid_width(COLUMNS, tile);
     let row = tile * COVER_ASPECT + LABEL_HEIGHT;
-    let height =
-        TITLE_BAR_HEIGHT + GRID_PADDING + GROUPS * HEADING_HEIGHT + (GROUPS - 0.5) * row + (GROUPS - 1.) * GRID_GAP;
+    let height = TITLE_BAR_HEIGHT
+        + TOOLBAR_HEIGHT
+        + GRID_PADDING
+        + GROUPS * HEADING_HEIGHT
+        + (GROUPS - 0.5) * row
+        + (GROUPS - 1.) * GRID_GAP;
     let screen = cx.primary_display().map(|d| d.bounds().size);
     let (max_width, max_height) =
         screen.map(|s| (f32::from(s.width), f32::from(s.height) * 0.95)).unwrap_or((width, height));
@@ -1244,6 +1280,24 @@ fn artwork(game: &Game, width: f32) -> AnyElement {
         None => div().size_full().into_any_element(),
     }
 }
+
+/// The icon (or initials) for a launcher button.
+fn launcher_glyph(name: &str, icon: Option<PathBuf>, muted: Hsla) -> AnyElement {
+    match icon {
+        Some(path) => img(path).size(px(LAUNCHER_SIZE - 10.)).object_fit(ObjectFit::Contain).into_any_element(),
+        None => div()
+            .text_xs()
+            .font_semibold()
+            .text_color(muted)
+            .child(name.chars().filter(|c| c.is_uppercase()).take(2).collect::<String>())
+            .into_any_element(),
+    }
+}
+/// A launcher button's size.
+const LAUNCHER_SIZE: f32 = 36.;
+/// The bar under the title bar, and its side columns (Add and Theme on the left).
+const TOOLBAR_HEIGHT: f32 = 48.;
+const TOOLBAR_SIDE: f32 = 80.;
 
 /// Tooltips show after this long (the UI kit's buttons wait half a second).
 const TOOLTIP_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
@@ -1464,7 +1518,7 @@ impl Render for MulchApp {
         let viewport = window.viewport_size();
         let layout = grid_layout(&self.recency_groups(), f32::from(viewport.width) - GRID_MARGIN_X * 2.);
         let title_bar = self.title_bar(cx);
-        let title_buttons = self.title_buttons(cx);
+        let toolbar = self.toolbar(cx);
         // Rows built explicitly (rather than by wrapping) so each group starts a new row.
         let mut tiles: Vec<AnyElement> =
             self.games.iter().enumerate().map(|(ix, game)| self.tile(ix, game, &layout, window, cx)).collect();
@@ -1504,7 +1558,7 @@ impl Render for MulchApp {
 
         let add_panel = self.add_panel.as_ref().map(|panel| self.add_panel(panel, cx));
 
-        v_flex().relative().size_full().children(add_panel).child(title_bar).child(title_buttons).child(
+        v_flex().relative().size_full().children(add_panel).child(title_bar).child(toolbar).child(
             div()
                 .id("library")
                 .flex_1()
