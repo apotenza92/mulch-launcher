@@ -1,9 +1,11 @@
 //! Starts games, launchers and uninstallers.
 
 use crate::scan::Action;
+use std::collections::HashMap;
 use std::io;
 use std::os::windows::process::CommandExt;
 use std::process::Command;
+use std::sync::{LazyLock, Mutex};
 
 /// Don't flash a console window when going through `cmd`.
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -32,12 +34,16 @@ pub fn run(action: &Action) -> io::Result<()> {
             .spawn()
             .map(|_| ()),
         // The game's page in the Xbox app; its Store page if the id can't be found.
+        // Usually looked up already (see look_up_xbox_pages), so it opens at once.
         Action::XboxAppPage(family_name) => {
+            if let Some(id) = XBOX_PRODUCT_IDS.lock().unwrap().get(family_name).cloned() {
+                return open_link(&xbox_app_link(&id));
+            }
             let family_name = family_name.clone();
-            // The lookup is a quick web request: off the UI thread.
+            // Not looked up yet: a quick web request, off the UI thread.
             std::thread::spawn(move || {
-                let link = match mulch_posters::store_product_id(&family_name) {
-                    Some(id) => format!("msxbox://game/?productId={id}"),
+                let link = match look_up_xbox_page(&family_name) {
+                    Some(id) => xbox_app_link(&id),
                     None => format!("ms-windows-store://pdp/?PFN={family_name}"),
                 };
                 let _ = open_link(&link);
@@ -45,6 +51,37 @@ pub fn run(action: &Action) -> io::Result<()> {
             Ok(())
         }
     }
+}
+
+/// Each Xbox game's Store product id, by package family name: looked up once,
+/// so its Show in Xbox app link needs no web request when it's clicked.
+static XBOX_PRODUCT_IDS: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(Default::default);
+
+/// Looks up (in the background) the Xbox app pages of these package families
+/// that aren't known yet.
+pub fn look_up_xbox_pages(family_names: Vec<String>) {
+    let missing: Vec<String> = {
+        let known = XBOX_PRODUCT_IDS.lock().unwrap();
+        family_names.into_iter().filter(|name| !known.contains_key(name)).collect()
+    };
+    if missing.is_empty() {
+        return;
+    }
+    std::thread::spawn(move || {
+        for name in missing {
+            look_up_xbox_page(&name);
+        }
+    });
+}
+
+fn look_up_xbox_page(family_name: &str) -> Option<String> {
+    let id = mulch_posters::store_product_id(family_name)?;
+    XBOX_PRODUCT_IDS.lock().unwrap().insert(family_name.to_string(), id.clone());
+    Some(id)
+}
+
+fn xbox_app_link(product_id: &str) -> String {
+    format!("msxbox://game/?productId={product_id}")
 }
 
 /// Opens a link with the app registered for it, as if it were clicked.

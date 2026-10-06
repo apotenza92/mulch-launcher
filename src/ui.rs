@@ -274,8 +274,9 @@ struct MulchApp {
     art_pending: HashSet<String>,
     /// Each launcher's icon as a one-colour glyph (light ink, dark ink), for poster buttons.
     glyphs: HashMap<Platform, (PathBuf, PathBuf)>,
-    /// Set by an action's click, so the tile under it doesn't also react.
-    action_clicked: bool,
+    /// When a poster button was last pressed, so the click on the tile under
+    /// it doesn't also count (as half of a double-click to play).
+    action_pressed: Option<std::time::Instant>,
     /// When each game was last played, for sorting most recent first.
     history: History,
     /// The theme the user chose (light, dark or following Windows), remembered.
@@ -327,7 +328,7 @@ impl MulchApp {
             checking: false,
             art_pending: HashSet::new(),
             glyphs: HashMap::new(),
-            action_clicked: false,
+            action_pressed: None,
             history: History::load(),
             // Coming back to the window (e.g. after playing): re-sort so the
             // game just played is first.
@@ -536,6 +537,16 @@ impl MulchApp {
         // after the scan), so a rescan doesn't blank every tile for a moment.
         let mut shown: HashMap<String, Art> = self.games.drain(..).filter_map(|g| Some((g.id, g.art?))).collect();
         self.games = result.games;
+        // So Show in Xbox app opens at once when clicked.
+        launch::look_up_xbox_pages(
+            self.games
+                .iter()
+                .filter_map(|g| match &g.show_in_launcher {
+                    Some(Action::XboxAppPage(name)) => Some(name.clone()),
+                    _ => None,
+                })
+                .collect(),
+        );
         for game in &mut self.games {
             if !matches!(game.art, Some(Art::Cover(_))) {
                 if let Some(art) = shown.remove(&game.id) {
@@ -608,9 +619,10 @@ impl MulchApp {
                 }
                 None => Icon::new(IconName::ExternalLink).size(px(GLASS_BUTTON * ICON_FILL)).into_any_element(),
             };
-            let button = self.glass(&game.id, "show-launcher", content, GLASS_BUTTON, false, dark, cx).on_click(
+            let button = self.glass(&game.id, "show-launcher", content, GLASS_BUTTON, false, dark, cx).on_mouse_down(
+                MouseButton::Left,
                 cx.listener(move |app, _, window, cx| {
-                    app.action_clicked = true;
+                    app.action_pressed = Some(std::time::Instant::now());
                     run_action(&show, &name, window, cx);
                 }),
             );
@@ -630,16 +642,19 @@ impl MulchApp {
                     dark,
                     cx,
                 )
-                .on_click(cx.listener(move |app, _, _, cx| {
-                    app.action_clicked = true;
-                    if app.confirm_remove.as_deref() == Some(id.as_str()) {
-                        app.confirm_remove = None;
-                        app.remove_manual(exe.clone(), cx);
-                    } else {
-                        app.confirm_remove = Some(id.clone());
-                        cx.notify();
-                    }
-                }));
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |app, _, _, cx| {
+                        app.action_pressed = Some(std::time::Instant::now());
+                        if app.confirm_remove.as_deref() == Some(id.as_str()) {
+                            app.confirm_remove = None;
+                            app.remove_manual(exe.clone(), cx);
+                        } else {
+                            app.confirm_remove = Some(id.clone());
+                            cx.notify();
+                        }
+                    }),
+                );
             let tip = if confirming { "Click again to remove" } else { "Remove" };
             action = Some(glass_slot(GLASS_BUTTON, with_tooltip(button, tip)).into_any_element());
         }
@@ -660,10 +675,13 @@ impl MulchApp {
                 dark,
                 cx,
             )
-            .on_click(cx.listener(move |app, _, window, cx| {
-                app.action_clicked = true;
-                app.play(&g, window, cx);
-            }));
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |app, _, window, cx| {
+                    app.action_pressed = Some(std::time::Instant::now());
+                    app.play(&g, window, cx);
+                }),
+            );
         let play =
             glass_slot(GLASS_PLAY_BUTTON, with_tooltip(play, "Play")).absolute().left(px(x - half)).top(px(y - half));
 
@@ -1067,7 +1085,8 @@ impl MulchApp {
             })
             // A double-click anywhere on the tile plays, as well as the Play button.
             .on_click(cx.listener(move |app, event: &ClickEvent, window, cx| {
-                if std::mem::take(&mut app.action_clicked) {
+                // The press on a poster button already acted.
+                if app.action_pressed.take().is_some_and(|at| at.elapsed() < BUTTON_PRESS_WINDOW) {
                     return;
                 }
                 if event.click_count() >= 2 {
@@ -1106,6 +1125,9 @@ impl MulchApp {
             .into_any_element()
     }
 }
+
+/// A click on a tile this soon after one of its buttons was pressed belongs to the button.
+const BUTTON_PRESS_WINDOW: std::time::Duration = std::time::Duration::from_millis(800);
 
 /// Corner rounding for posters, panels and cards.
 const TILE_RADIUS: f32 = 8.;
