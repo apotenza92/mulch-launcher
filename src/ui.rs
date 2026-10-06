@@ -43,8 +43,8 @@ pub fn run(restore: Option<Restore>) {
             // it. The title is still set for the taskbar and Alt+Tab.
             titlebar: Some(TitlebarOptions { title: Some(APP_NAME.into()), ..TitleBar::title_bar_options() }),
             app_owns_titlebar_drag: true,
-            // Frosted glass: the desktop behind shows through, blurred.
-            window_background: WindowBackgroundAppearance::Blurred,
+            // See-through: the desktop behind shows through, tinted (not blurred).
+            window_background: WindowBackgroundAppearance::Transparent,
             window_bounds: Some(match restore {
                 Some(r) => {
                     let bounds = Bounds::new(point(px(r.x), px(r.y)), size(px(r.width), px(r.height)));
@@ -1800,8 +1800,8 @@ impl Render for MulchApp {
 
         let add_panel = self.add_panel.as_ref().map(|panel| self.add_panel(panel, cx));
 
-        // Frosted glass while windowed; maximised, a solid background in the
-        // glass's own tint (Windows drops the blur while animating to and from
+        // See-through while windowed; maximised, a solid background in the
+        // window's own tint (Windows draws it opaque while animating to and from
         // maximised anyway, so the solid look lines up with that).
         let solid = window.is_maximized().then(|| with_alpha(cx.theme().background, 1.));
 
