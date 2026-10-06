@@ -8,6 +8,7 @@ use mulch_launcher::restore::Restore;
 use mulch_launcher::{install, scan};
 
 fn main() {
+    mulch_launcher::trace::start();
     let has = |flag: &str| std::env::args().any(|a| a == flag);
     if has("--scan") {
         print_scan();
@@ -61,6 +62,7 @@ fn main() {
     // Restarted after an update: reopen where the old copy was.
     let restore =
         args.iter().position(|a| a == "--restore").and_then(|ix| args.get(ix + 1)).and_then(|a| Restore::from_arg(a));
+    mulch_launcher::trace::mark("main done");
     ui::run(restore);
 }
 
@@ -69,7 +71,14 @@ fn main() {
 /// details, including launch, uninstall and "show in launcher" commands.
 fn print_scan() {
     let only: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with("--")).collect();
-    let result = scan::scan_all(&only);
+    let mut result = scan::scan_all(&only);
+    // Repeat scans show the cost of the app's periodic re-checks.
+    if std::env::args().any(|a| a == "--repeat") {
+        for _ in 0..5 {
+            result = scan::scan_all(&only);
+            println!("again: {:?}", result.total);
+        }
+    }
     if std::env::args().any(|a| a == "--json") {
         println!("{}", serde_json::to_string_pretty(&result.games).unwrap_or_default());
         return;

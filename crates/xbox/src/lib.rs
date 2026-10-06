@@ -7,10 +7,12 @@
 //! DLC and add-on "stub" packages also ship that config but declare no
 //! launchable app, so requiring an app entry filters them out.
 
+use mulch_core::registry::{self, HKEY_CURRENT_USER};
 use mulch_core::{Action, Art, Game, Launcher, Library, Platform, ScanContext};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use windows::Management::Deployment::PackageManager;
 use windows::Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize};
 use windows::core::HSTRING;
@@ -44,9 +46,34 @@ impl Library for Xbox {
     }
 
     fn games(&self, _: &ScanContext) -> Vec<Game> {
+        // Going through every package is slow (~100 ms), and the library is
+        // re-checked every few seconds: reuse the last answer until the
+        // user's installed packages change.
+        let installed = installed_packages();
+        let mut last = LAST_SCAN.lock().unwrap();
+        if let Some((seen, games)) = last.as_ref()
+            && *seen == installed
+        {
+            return games.clone();
+        }
         init_winrt();
-        scan_packages().unwrap_or_default()
+        let games = scan_packages().unwrap_or_default();
+        *last = Some((installed, games.clone()));
+        games
     }
+}
+
+/// The last scan, and the installed packages it was made from.
+static LAST_SCAN: Mutex<Option<(Vec<String>, Vec<Game>)>> = Mutex::new(None);
+
+/// The current user's installed packages (full names, which include the
+/// version), as Windows lists them in the registry: quick to read, and it
+/// changes whenever a package is installed, updated or removed.
+fn installed_packages() -> Vec<String> {
+    registry::subkeys(
+        HKEY_CURRENT_USER,
+        r"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages",
+    )
 }
 
 /// An installed Microsoft Store app as a button, by package family name:

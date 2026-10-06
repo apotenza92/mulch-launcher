@@ -34,8 +34,13 @@ const APP_NAME: &str = "MulchLauncher";
 /// `restore`: set when restarting after an update, to reopen where the old
 /// copy was, in the background.
 pub fn run(restore: Option<Restore>) {
-    gpui_kit::application().with_assets(crate::assets::Assets).run(move |cx| {
+    mulch_launcher::trace::mark("creating app");
+    let app = gpui_kit::application();
+    mulch_launcher::trace::mark("app created");
+    app.with_assets(crate::assets::Assets).run(move |cx| {
+        mulch_launcher::trace::mark("app running");
         gpui_kit::init(cx);
+        mulch_launcher::trace::mark("kit init");
         Theme::change(theme_mode(Settings::load().theme, cx.window_appearance()), None, cx);
         finish_theme(cx);
 
@@ -65,8 +70,10 @@ pub fn run(restore: Option<Restore>) {
             app_id: Some(APP_NAME.into()),
             ..Default::default()
         };
+        mulch_launcher::trace::mark("opening window");
         gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| MulchApp::new(restore, window, cx)))
             .expect("failed to open the window");
+        mulch_launcher::trace::mark("window opened");
     });
 }
 
@@ -314,6 +321,7 @@ struct AddPanel {
 
 impl MulchApp {
     fn new(restore: Option<Restore>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        mulch_launcher::trace::mark("app new");
         let mut app = Self {
             games: Vec::new(),
             launchers: Vec::new(),
@@ -358,10 +366,17 @@ impl MulchApp {
             ],
         };
         app.apply_theme(window, cx);
+        // Last time's library, posters and all, on the very first frame; the
+        // scan that follows brings it up to date.
+        if let Some(games) = load_library() {
+            app.games = games;
+            app.history.sort(&mut app.games);
+        }
         app.rescan(cx);
         app.watch_for_running_games(cx);
         app.watch_for_library_changes(cx);
         app.watch_for_updates(window, cx);
+        mulch_launcher::trace::mark("app new done");
         app
     }
 
@@ -454,7 +469,14 @@ impl MulchApp {
         }
         self.checking = true;
         cx.spawn(async move |this, cx| {
-            let found = cx.background_spawn(async move { library_signature(&scan::scan_all(&[]).games) }).await;
+            let found = cx
+                .background_spawn(async move {
+                    let started = std::time::Instant::now();
+                    let found = library_signature(&scan::scan_all(&[]).games);
+                    mulch_launcher::trace::mark(&format!("library check {:?}", started.elapsed()));
+                    found
+                })
+                .await;
             this.update(cx, |app, cx| {
                 app.checking = false;
                 if found != library_signature(&app.games) {
@@ -471,7 +493,14 @@ impl MulchApp {
             loop {
                 cx.background_executor().timer(PLAY_CHECK_INTERVAL).await;
                 let Ok(games) = this.update(cx, |app, _| app.games.clone()) else { break };
-                let running = cx.background_spawn(async move { history::running_games(&games) }).await;
+                let running = cx
+                    .background_spawn(async move {
+                        let started = std::time::Instant::now();
+                        let running = history::running_games(&games);
+                        mulch_launcher::trace::mark(&format!("running games check {:?}", started.elapsed()));
+                        running
+                    })
+                    .await;
                 if running.is_empty() {
                     continue;
                 }
@@ -538,6 +567,7 @@ impl MulchApp {
     }
 
     fn apply(&mut self, result: ScanResult, cx: &mut Context<Self>) {
+        mulch_launcher::trace::mark("scan applied");
         // Keep the art already showing (icons and downloaded posters arrive
         // after the scan), so a rescan doesn't blank every tile for a moment.
         let mut shown: HashMap<String, Art> = self.games.drain(..).filter_map(|g| Some((g.id, g.art?))).collect();
@@ -720,6 +750,7 @@ impl MulchApp {
         }
         self.make_glyphs(cx);
         self.size_icons(cx);
+        save_library(self.games.clone());
         cx.notify();
     }
 
@@ -1564,6 +1595,28 @@ fn check_row(
         )
 }
 
+/// Where the library is kept between runs, so it shows the moment the app opens.
+fn library_file() -> Option<PathBuf> {
+    Some(mulch_core::paths::data_dir()?.join("library.json"))
+}
+
+/// The library as last seen, if it was saved.
+fn load_library() -> Option<Vec<Game>> {
+    let text = std::fs::read_to_string(library_file()?).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// Saves the library (with its art), off the UI thread.
+fn save_library(games: Vec<Game>) {
+    std::thread::spawn(move || {
+        let Some(path) = library_file() else { return };
+        if let (Some(dir), Ok(text)) = (path.parent(), serde_json::to_string(&games)) {
+            let _ = std::fs::create_dir_all(dir);
+            let _ = std::fs::write(path, text);
+        }
+    });
+}
+
 fn run_action(action: &Action, name: &str, window: &mut Window, cx: &mut App) {
     if let Err(err) = launch::run(action) {
         window.push_notification(Notification::error(format!("Couldn't start {name}: {err}")), cx);
@@ -1572,6 +1625,7 @@ fn run_action(action: &Action, name: &str, window: &mut Window, cx: &mut App) {
 
 impl Render for MulchApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        mulch_launcher::trace::mark("render");
         self.update_min_width(window, cx);
         let viewport = window.viewport_size();
         let layout = grid_layout(&self.recency_groups(), f32::from(viewport.width) - GRID_MARGIN_X * 2.);

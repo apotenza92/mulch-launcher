@@ -13,11 +13,11 @@ pub mod paths;
 pub mod registry;
 
 use registry::UninstallEntry;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Platform {
     Steam,
     Epic,
@@ -47,7 +47,7 @@ impl Platform {
 }
 
 /// How to start (or show) something.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Action {
     /// A URI handled by a launcher, e.g. `steam://rungameid/730`.
     Uri(String),
@@ -63,7 +63,7 @@ pub enum Action {
     XboxAppPage(String),
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Game {
     /// Stable id, unique across platforms, e.g. `steam:730`.
     pub id: String,
@@ -85,6 +85,7 @@ pub struct Game {
     pub last_played: Option<u64>,
     /// The same game installed by other launchers too (a Steam copy of a
     /// Ubisoft game, say): each launcher and its Show in launcher link.
+    #[serde(default)]
     pub other_copies: Vec<(Platform, Option<Action>)>,
 }
 
@@ -108,7 +109,7 @@ impl Game {
 }
 
 /// Local artwork for a tile.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Art {
     /// Portrait cover art.
     Cover(PathBuf),
