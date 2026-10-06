@@ -281,10 +281,6 @@ struct MulchApp {
     leaving: HashMap<String, Tween>,
     /// Each launcher's icon as a one-colour glyph (light ink, dark ink), for poster buttons.
     glyphs: HashMap<Platform, (PathBuf, PathBuf)>,
-    /// Each poster's accent colour, for tinting things around it.
-    accents: HashMap<PathBuf, Hsla>,
-    /// Each cover's glow image (its own colours, spilling past its edges).
-    glows: HashMap<PathBuf, PathBuf>,
     /// A theme change in progress: the colours it's blending from and to.
     theme_fade: Option<(ThemeColor, ThemeColor, Tween)>,
     /// When games first appeared: until shortly after, tiles enter one after
@@ -339,8 +335,6 @@ impl MulchApp {
             art_pending: HashSet::new(),
             button_heights: HashMap::new(),
             leaving: HashMap::new(),
-            accents: HashMap::new(),
-            glows: HashMap::new(),
             glyphs: HashMap::new(),
             theme_fade: None,
             first_shown: None,
@@ -724,7 +718,6 @@ impl MulchApp {
                 launcher.icon = Some(icon.clone());
             }
         }
-        self.find_accents(cx);
         self.make_glyphs(cx);
         cx.notify();
     }
@@ -753,72 +746,6 @@ impl MulchApp {
                 .await;
             this.update(cx, |app, cx| {
                 app.glyphs.extend(made);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// Works out the accent colour (and for covers, the glow) of posters that
-    /// don't have them yet, in the background.
-    fn find_accents(&mut self, cx: &mut Context<Self>) {
-        let covers: Vec<PathBuf> = self
-            .games
-            .iter()
-            .filter_map(|g| match &g.art {
-                Some(Art::Cover(path)) => Some(path.clone()),
-                _ => None,
-            })
-            .filter(|path| !self.glows.contains_key(path))
-            .collect();
-        if !covers.is_empty() {
-            cx.spawn(async move |this, cx| {
-                let found = cx
-                    .background_spawn(async move {
-                        covers
-                            .into_iter()
-                            .filter_map(|path| Some((path.clone(), art::glow(&path)?)))
-                            .collect::<Vec<_>>()
-                    })
-                    .await;
-                this.update(cx, |app, cx| {
-                    app.glows.extend(found);
-                    cx.notify();
-                })
-                .ok();
-            })
-            .detach();
-        }
-        let wanted: Vec<PathBuf> = self
-            .games
-            .iter()
-            .filter_map(|g| match &g.art {
-                Some(Art::Cover(path) | Art::Icon(path)) => Some(path.clone()),
-                None => None,
-            })
-            .filter(|path| !self.accents.contains_key(path))
-            .collect();
-        if wanted.is_empty() {
-            return;
-        }
-        cx.spawn(async move |this, cx| {
-            let found = cx
-                .background_spawn(async move {
-                    wanted
-                        .into_iter()
-                        .filter_map(|path| {
-                            let [r, g, b] = art::accent(&path)?;
-                            Some((
-                                path,
-                                Hsla::from(Rgba { r: r as f32 / 255., g: g as f32 / 255., b: b as f32 / 255., a: 1. }),
-                            ))
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .await;
-            this.update(cx, |app, cx| {
-                app.accents.extend(found);
                 cx.notify();
             })
             .ok();
@@ -1173,26 +1100,15 @@ impl MulchApp {
 
         // The full name shows on hover only when it's cut short.
         let hovered = self.hovered_tile == Some(ix);
+        // How much the hovered poster grows on each side.
+        let grow_x = width * HOVER_GROW * lift;
+        let grow_y = grow_x * COVER_ASPECT;
         let dark = cx.theme().mode.is_dark();
         // How far a hovered, cut-short name slides to show its end.
         let overflow = hovered
             .then(|| text_width(&game.name, window, cx) - width)
             .filter(|o| *o > 0.)
             .map(|o| o + MARQUEE_END_ROOM);
-        // Its glow: shown behind it, reaching past each edge.
-        let glow = match &game.art {
-            Some(Art::Cover(path)) if lift > 0. => self.glows.get(path).map(|image| {
-                let reach = art::GLOW_PAD as f32 * width / art::GLOW_WIDTH as f32;
-                img(image.clone())
-                    .absolute()
-                    .top(px(-reach))
-                    .left(px(-reach))
-                    .w(px(width + 2. * reach))
-                    .h(px(height + 2. * reach))
-                    .opacity(GLOW_STRENGTH * lift.clamp(0., 1.))
-            }),
-            _ => None,
-        };
         let leaving = Tween::value(&self.leaving, &game.id);
         let staggered = self.first_shown.is_none_or(|at| at.elapsed() < STAGGER_WINDOW);
         div()
@@ -1225,17 +1141,18 @@ impl MulchApp {
                 }
             }))
             .child(
-                // Every poster casts a soft drop shadow. Hovered, the shadow deepens
-                // and it glows in its own colours, each edge's spilling past it.
-                // Both stay within the gap to the next poster, and under its name.
-                div().relative().w(px(width)).h(px(height)).children(glow).child(
+                // Hovered, the poster grows a little, centred where it is.
+                div().relative().w(px(width)).h(px(height)).child(
                     div()
-                        .size_full()
+                        .absolute()
+                        .top(px(-grow_y))
+                        .left(px(-grow_x))
+                        .w(px(width + 2. * grow_x))
+                        .h(px(height + 2. * grow_y))
                         .overflow_hidden()
                         .rounded(px(TILE_RADIUS))
                         .bg(theme.muted)
-                        .child(poster)
-                        .shadow(cast_shadow(lift, dark)),
+                        .child(poster),
                 ),
             )
             // The buttons sit above the poster, not clipped to its edges.
@@ -1245,8 +1162,15 @@ impl MulchApp {
             .child({
                 // One line, cut short with "…"; while hovered, a name that's cut
                 // short slides along to show the rest, and back.
-                // Centred under the poster.
-                let line = div().h(px(NAME_LINE_HEIGHT)).mt_2().text_sm().font_medium().overflow_hidden();
+                // Centred under the poster; moves down as it grows, so it stays clear.
+                let line = div()
+                    .relative()
+                    .top(px(grow_y))
+                    .h(px(NAME_LINE_HEIGHT))
+                    .mt_2()
+                    .text_sm()
+                    .font_medium()
+                    .overflow_hidden();
                 match overflow {
                     Some(overflow) => line.child(div().whitespace_nowrap().child(game.name.clone()).with_animation(
                         ElementId::Name(format!("marquee-{}", game.id).into()),
@@ -1370,25 +1294,9 @@ fn blend_colors(from: &ThemeColor, to: &ThemeColor, t: f32) -> ThemeColor {
 /// Corner rounding for posters, panels and cards.
 const TILE_RADIUS: f32 = 8.;
 
-/// How strongly a hovered poster glows.
-const GLOW_STRENGTH: f32 = 0.9;
-
-/// Every poster's drop shadow, so it stands off the background: subtle at
-/// rest, deeper and softer as it's hovered (`lift` 0 to 1).
-fn cast_shadow(lift: f32, dark: bool) -> Vec<BoxShadow> {
-    let lit = lift.clamp(0., 1.);
-    let between = |rest: f32, hovered: f32| rest + (hovered - rest) * lit;
-    let (rest, hovered) = if dark { (0.35, 0.5) } else { (0.12, 0.2) };
-    vec![BoxShadow {
-        color: gpui_kit::black().opacity(between(rest, hovered)),
-        // Kept within the gap between posters, so it never falls across a neighbour.
-        offset: point(px(0.), px(between(3., 5.))),
-        blur_radius: px(between(8., 12.)),
-        spread_radius: px(between(-2., -3.)),
-        inset: false,
-    }]
-}
-/// How quickly a hovered poster's ring, shadow and buttons come in.
+/// A hovered poster grows by this share of its width on each side.
+const HOVER_GROW: f32 = 0.03;
+/// How quickly a hovered poster grows (and its buttons appear).
 const LIFT_DURATION: std::time::Duration = std::time::Duration::from_millis(520);
 /// Tiles' entrance: how far they rise, for how long, and the stagger between them.
 const ENTER_RISE: f32 = 12.;
