@@ -83,6 +83,9 @@ pub struct Game {
     /// When the launcher itself last saw it played (Unix seconds), for the
     /// launchers that reliably record that on this PC (Steam).
     pub last_played: Option<u64>,
+    /// The same game installed by other launchers too (a Steam copy of a
+    /// Ubisoft game, say): each launcher and its Show in launcher link.
+    pub other_copies: Vec<(Platform, Option<Action>)>,
 }
 
 impl Game {
@@ -99,6 +102,7 @@ impl Game {
             art: None,
             icon_source: None,
             last_played: None,
+            other_copies: Vec::new(),
         }
     }
 }

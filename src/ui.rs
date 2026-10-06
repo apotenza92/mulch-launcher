@@ -584,7 +584,7 @@ impl MulchApp {
     fn glass(
         &self,
         game_id: &str,
-        which: &'static str,
+        which: impl Into<ElementId>,
         content: AnyElement,
         size: f32,
         danger: bool,
@@ -595,40 +595,49 @@ impl MulchApp {
         glass_button(which, content, size, danger, dark)
     }
 
-    /// Glass buttons over a hovered poster: Play, big, centred; below it one
-    /// smaller button: Show in its launcher, or for games the user added,
+    /// Buttons over a hovered poster: Play, big, centred; below it Show in its
+    /// launcher (one per launcher that has it), or for games the user added,
     /// Remove (which asks again first).
     fn poster_actions(&self, game: &Game, size: (f32, f32), cx: &mut Context<Self>) -> Div {
         let dark = cx.theme().mode.is_dark();
-        let mut action: Option<AnyElement> = None;
-        if let Some(show) = game.show_in_launcher.clone() {
-            let launcher = match game.platform {
+        let mut actions: Vec<AnyElement> = Vec::new();
+        // One button per launcher that has the game (usually one; a game two
+        // launchers installed gets a smaller button for each, side by side).
+        let copies: Vec<(Platform, Action)> = std::iter::once((game.platform, game.show_in_launcher.clone()))
+            .chain(game.other_copies.iter().cloned())
+            .filter_map(|(platform, show)| Some((platform, show?)))
+            .collect();
+        let button_size = if copies.len() > 1 { GLASS_SMALL_BUTTON } else { GLASS_BUTTON };
+        for (ix, (platform, show)) in copies.into_iter().enumerate() {
+            let launcher = match platform {
                 Platform::Xbox => "the Xbox app",
                 Platform::Gog => "GOG Galaxy",
                 other => other.label(),
             };
             let name = game.name.clone();
             // The launcher's own logo, as a glyph in the button's ink.
-            let glyph = self
-                .glyphs
-                .get(&game.platform)
-                .map(|(on_dark, on_light)| if dark { on_dark } else { on_light }.clone());
+            let glyph =
+                self.glyphs.get(&platform).map(|(on_dark, on_light)| if dark { on_dark } else { on_light }.clone());
             let content = match glyph {
                 Some(glyph) => {
-                    img(glyph).size(px(GLASS_BUTTON * GLYPH_FILL)).object_fit(ObjectFit::Contain).into_any_element()
+                    img(glyph).size(px(button_size * GLYPH_FILL)).object_fit(ObjectFit::Contain).into_any_element()
                 }
-                None => Icon::new(IconName::ExternalLink).size(px(GLASS_BUTTON * ICON_FILL)).into_any_element(),
+                None => Icon::new(IconName::ExternalLink).size(px(button_size * ICON_FILL)).into_any_element(),
             };
-            let button = self.glass(&game.id, "show-launcher", content, GLASS_BUTTON, false, dark, cx).on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |app, _, window, cx| {
-                    app.action_pressed = Some(std::time::Instant::now());
-                    run_action(&show, &name, window, cx);
-                }),
-            );
-            action =
-                Some(glass_slot(GLASS_BUTTON, with_tooltip(button, format!("Show in {launcher}"))).into_any_element());
-        } else if let (Platform::Manual, Action::Exe { path, .. }) = (game.platform, &game.launch) {
+            let button =
+                self.glass(&game.id, ("show-launcher", ix), content, button_size, false, dark, cx).on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |app, _, window, cx| {
+                        app.action_pressed = Some(std::time::Instant::now());
+                        run_action(&show, &name, window, cx);
+                    }),
+                );
+            actions
+                .push(glass_slot(button_size, with_tooltip(button, format!("Show in {launcher}"))).into_any_element());
+        }
+        if actions.is_empty()
+            && let (Platform::Manual, Action::Exe { path, .. }) = (game.platform, &game.launch)
+        {
             let exe = path.clone();
             let id = game.id.clone();
             let confirming = self.confirm_remove.as_deref() == Some(game.id.as_str());
@@ -656,7 +665,7 @@ impl MulchApp {
                     }),
                 );
             let tip = if confirming { "Click again to remove" } else { "Remove" };
-            action = Some(glass_slot(GLASS_BUTTON, with_tooltip(button, tip)).into_any_element());
+            actions.push(glass_slot(GLASS_BUTTON, with_tooltip(button, tip)).into_any_element());
         }
 
         // Play, big, in the middle of the space above the bottom row.
@@ -685,13 +694,9 @@ impl MulchApp {
         let play =
             glass_slot(GLASS_PLAY_BUTTON, with_tooltip(play, "Play")).absolute().left(px(x - half)).top(px(y - half));
 
-        div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .child(play)
-            .child(h_flex().absolute().left_0().right_0().bottom(px(GLASS_INSET)).justify_center().children(action))
+        div().absolute().top_0().left_0().size_full().child(play).child(
+            h_flex().absolute().left_0().right_0().bottom(px(GLASS_INSET)).justify_center().gap_2().children(actions),
+        )
     }
     fn apply_art(&mut self, games: Vec<Game>, launchers: Vec<Launcher>, cx: &mut Context<Self>) {
         // Icons may have been added or replaced with trimmed copies.
@@ -1271,7 +1276,7 @@ fn text_width(text: &str, window: &Window, cx: &App) -> f32 {
 /// in light mode, charcoal with a white icon in dark mode. `danger` makes it
 /// red (a remove waiting to be confirmed). Solid, and it changes colour the
 /// instant it's hovered or pressed: nothing animates.
-fn glass_button(id: &'static str, content: AnyElement, size: f32, danger: bool, dark: bool) -> Stateful<Div> {
+fn glass_button(id: impl Into<ElementId>, content: AnyElement, size: f32, danger: bool, dark: bool) -> Stateful<Div> {
     let shade = |l: f32| gpui_kit::hsla(240. / 360., 0.06, l, 1.);
     let (fill, hover, pressed, ink, edge) = if danger {
         let alarm = |l: f32| gpui_kit::hsla(0., 0.72, l, 1.);
@@ -1313,6 +1318,8 @@ fn icon_content(icon: IconName, size: f32) -> AnyElement {
     Icon::new(icon).size(px(size * ICON_FILL)).into_any_element()
 }
 
+/// A launcher button's size when a game has several, side by side.
+const GLASS_SMALL_BUTTON: f32 = GLASS_BUTTON * 0.72;
 /// How much of a glass button its icon fills, and a launcher glyph (tight-cropped, so a touch less).
 const ICON_FILL: f32 = 0.54;
 const GLYPH_FILL: f32 = 0.5;
