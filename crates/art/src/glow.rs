@@ -24,7 +24,7 @@ pub fn glow(cover: &Path) -> Option<PathBuf> {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     cover.hash(&mut hasher);
     std::fs::metadata(cover).ok()?.modified().ok()?.hash(&mut hasher);
-    let out = dir.join(format!("{:016x}-glow2.png", hasher.finish()));
+    let out = dir.join(format!("{:016x}-glow3.png", hasher.finish()));
     if out.is_file() {
         return Some(out);
     }
@@ -51,19 +51,20 @@ fn make_glow(poster: &RgbaImage) -> RgbaImage {
         Luma([if inside { 255 } else { 0 }])
     });
     let fade = image::imageops::blur(&outline, GLOW_BLUR);
-    // Fully clear at the image's own edge: stretched over the screen, any
-    // colour left in its outermost pixels would show as a hard line.
-    let clear = |x: u32, y: u32| x < GLOW_CLEAR || y < GLOW_CLEAR || x >= w - GLOW_CLEAR || y >= h - GLOW_CLEAR;
+    // Eased all the way to clear at the image's own edge, so no hard line
+    // shows where it ends: fully clear for the outermost pixels, then rising.
+    let to_edge = |x: u32, y: u32| x.min(y).min(w - 1 - x).min(h - 1 - y) as f32;
     RgbaImage::from_fn(w, h, |x, y| {
-        if clear(x, y) {
-            return Rgba([0, 0, 0, 0]);
-        }
+        let ease = ((to_edge(x, y) - GLOW_CLEAR) / GLOW_EASE).clamp(0., 1.);
+        let ease = ease * ease * (3. - 2. * ease);
         let c = colours.get_pixel(x, y);
-        Rgba([c[0], c[1], c[2], fade.get_pixel(x, y)[0]])
+        Rgba([c[0], c[1], c[2], (fade.get_pixel(x, y)[0] as f32 * ease).round() as u8])
     })
 }
-/// How many pixels at the glow image's edge are left fully clear.
-const GLOW_CLEAR: u32 = 2;
+/// The glow image's outermost pixels are fully clear, then it eases in over
+/// `GLOW_EASE` more.
+const GLOW_CLEAR: f32 = 1.;
+const GLOW_EASE: f32 = 4.;
 
 #[cfg(test)]
 mod tests {

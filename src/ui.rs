@@ -1183,25 +1183,13 @@ impl MulchApp {
         let glow = match &game.art {
             Some(Art::Cover(path)) if lift > 0. => self.glows.get(path).map(|image| {
                 let reach = art::GLOW_PAD as f32 * width / art::GLOW_WIDTH as f32;
-                // Clipped a little inside the image's own edge: stretched, its outermost
-                // pixels can pick up a sliver of a neighbouring image and draw a line.
-                let inside = reach - GLOW_TRIM;
-                div()
+                img(image.clone())
                     .absolute()
-                    .top(px(-inside))
-                    .left(px(-inside))
-                    .w(px(width + 2. * inside))
-                    .h(px(height + 2. * inside))
-                    .overflow_hidden()
-                    .child(
-                        img(image.clone())
-                            .absolute()
-                            .top(px(-GLOW_TRIM))
-                            .left(px(-GLOW_TRIM))
-                            .w(px(width + 2. * reach))
-                            .h(px(height + 2. * reach))
-                            .opacity(GLOW_STRENGTH * lift.clamp(0., 1.)),
-                    )
+                    .top(px(-reach))
+                    .left(px(-reach))
+                    .w(px(width + 2. * reach))
+                    .h(px(height + 2. * reach))
+                    .opacity(GLOW_STRENGTH * lift.clamp(0., 1.))
             }),
             _ => None,
         };
@@ -1239,23 +1227,16 @@ impl MulchApp {
             .child(
                 // Every poster casts a soft drop shadow. Hovered, the shadow deepens
                 // and it glows in its own colours, each edge's spilling past it.
-                // Then it's drawn after the other tiles, so both fall over them.
-                div().relative().w(px(width)).h(px(height)).child({
-                    let frame = div().relative().size_full().children(glow).child(
-                        div()
-                            .size_full()
-                            .overflow_hidden()
-                            .rounded(px(TILE_RADIUS))
-                            .bg(theme.muted)
-                            .child(poster)
-                            .shadow(cast_shadow(lift, dark)),
-                    );
-                    if lift > 0. {
-                        deferred(frame).with_priority(0).into_any_element()
-                    } else {
-                        frame.into_any_element()
-                    }
-                }),
+                // Both stay within the gap to the next poster, and under its name.
+                div().relative().w(px(width)).h(px(height)).children(glow).child(
+                    div()
+                        .size_full()
+                        .overflow_hidden()
+                        .rounded(px(TILE_RADIUS))
+                        .bg(theme.muted)
+                        .child(poster)
+                        .shadow(cast_shadow(lift, dark)),
+                ),
             )
             // The buttons sit above the poster, not clipped to its edges.
             .children(actions.map(|actions| {
@@ -1391,8 +1372,6 @@ const TILE_RADIUS: f32 = 8.;
 
 /// How strongly a hovered poster glows.
 const GLOW_STRENGTH: f32 = 0.9;
-/// How much of the glow image's outer edge is clipped off.
-const GLOW_TRIM: f32 = 4.;
 
 /// Every poster's drop shadow, so it stands off the background: subtle at
 /// rest, deeper and softer as it's hovered (`lift` 0 to 1).
