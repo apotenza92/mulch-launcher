@@ -43,8 +43,9 @@ pub fn run(restore: Option<Restore>) {
             // it. The title is still set for the taskbar and Alt+Tab.
             titlebar: Some(TitlebarOptions { title: Some(APP_NAME.into()), ..TitleBar::title_bar_options() }),
             app_owns_titlebar_drag: true,
-            // See-through: the desktop behind shows through, tinted (not blurred).
-            window_background: WindowBackgroundAppearance::Transparent,
+            // Frosted glass: the desktop behind shows through, blurred, under a
+            // milky tint (see make_glassy).
+            window_background: WindowBackgroundAppearance::Blurred,
             window_bounds: Some(match restore {
                 Some(r) => {
                     let bounds = Bounds::new(point(px(r.x), px(r.y)), size(px(r.width), px(r.height)));
@@ -1373,7 +1374,7 @@ fn make_glassy(cx: &mut App) {
     let foreground = theme.colors.foreground;
 
     let tint = with_alpha(theme.colors.background, 1.);
-    let alpha = glass_alpha(foreground, tint, worst, TEXT_CONTRAST);
+    let alpha = GLASS_TINT;
     let background = tint.opacity(alpha);
     theme.colors.background = background;
     theme.tokens.background = background.into();
@@ -1389,6 +1390,8 @@ fn with_alpha(color: Hsla, alpha: f32) -> Hsla {
     Hsla { a: alpha, ..color }
 }
 
+/// How opaque the window's tint is over the blurred desktop.
+const GLASS_TINT: f32 = 0.5;
 /// Body text contrast (WCAG AAA), and secondary text (AA).
 const TEXT_CONTRAST: f32 = 7.;
 const SECONDARY_CONTRAST: f32 = 4.5;
@@ -1800,8 +1803,8 @@ impl Render for MulchApp {
 
         let add_panel = self.add_panel.as_ref().map(|panel| self.add_panel(panel, cx));
 
-        // See-through while windowed; maximised, a solid background in the
-        // window's own tint (Windows draws it opaque while animating to and from
+        // Frosted glass while windowed; maximised, a solid background in the
+        // glass's own tint (Windows drops the blur while animating to and from
         // maximised anyway, so the solid look lines up with that).
         let solid = window.is_maximized().then(|| with_alpha(cx.theme().background, 1.));
 
