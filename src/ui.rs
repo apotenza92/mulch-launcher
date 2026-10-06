@@ -1402,9 +1402,10 @@ fn cast_shadow(lift: f32, dark: bool) -> Vec<BoxShadow> {
     let (rest, hovered) = if dark { (0.45, 0.7) } else { (0.16, 0.32) };
     vec![BoxShadow {
         color: gpui_kit::black().opacity(between(rest, hovered)),
-        offset: point(px(0.), px(between(4., 14.))),
-        blur_radius: px(between(12., 32.)),
-        spread_radius: px(between(-2., -4.)),
+        // Kept within the gap between posters, so it never falls across a neighbour.
+        offset: point(px(0.), px(between(4., 8.))),
+        blur_radius: px(between(12., 18.)),
+        spread_radius: px(between(-2., -5.)),
         inset: false,
     }]
 }
