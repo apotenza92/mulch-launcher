@@ -576,7 +576,7 @@ impl MulchApp {
         &self,
         game_id: &str,
         which: &'static str,
-        content: AnyElement,
+        content: impl FnOnce(f32) -> AnyElement,
         size: f32,
         danger: bool,
         dark: bool,
@@ -620,12 +620,16 @@ impl MulchApp {
             };
             let name = game.name.clone();
             // The launcher's own logo, as a glyph in the button's ink.
-            let content = match self.glyphs.get(&game.platform) {
-                Some((on_dark, on_light)) => img(if dark { on_dark.clone() } else { on_light.clone() })
-                    .size(px(GLASS_BUTTON * GLYPH_FILL))
+            let glyph = self
+                .glyphs
+                .get(&game.platform)
+                .map(|(on_dark, on_light)| if dark { on_dark } else { on_light }.clone());
+            let content = move |scale: f32| match glyph {
+                Some(glyph) => img(glyph)
+                    .size(px(GLASS_BUTTON * GLYPH_FILL * scale))
                     .object_fit(ObjectFit::Contain)
                     .into_any_element(),
-                None => Icon::new(IconName::ExternalLink).size(px(GLASS_BUTTON * ICON_FILL)).into_any_element(),
+                None => Icon::new(IconName::ExternalLink).size(px(GLASS_BUTTON * ICON_FILL * scale)).into_any_element(),
             };
             let button = self.glass(&game.id, "show-launcher", content, GLASS_BUTTON, false, dark, cx).on_click(
                 cx.listener(move |app, _, window, cx| {
@@ -643,7 +647,7 @@ impl MulchApp {
                 .glass(
                     &game.id,
                     "remove",
-                    icon_content(IconName::Close, GLASS_BUTTON),
+                    |scale| icon_content(IconName::Close, GLASS_BUTTON * scale),
                     GLASS_BUTTON,
                     confirming,
                     dark,
@@ -673,7 +677,12 @@ impl MulchApp {
             .glass(
                 &game.id,
                 "play",
-                Icon::empty().path("mulch/play-filled.svg").size(px(GLASS_PLAY_BUTTON * ICON_FILL)).into_any_element(),
+                |scale| {
+                    Icon::empty()
+                        .path("mulch/play-filled.svg")
+                        .size(px(GLASS_PLAY_BUTTON * ICON_FILL * scale))
+                        .into_any_element()
+                },
                 GLASS_PLAY_BUTTON,
                 false,
                 dark,
@@ -1368,10 +1377,11 @@ fn text_width(text: &str, window: &Window, cx: &App) -> f32 {
 /// with a dark icon in light mode, dark glass with a white icon in dark mode.
 /// `danger` tints it red (a remove waiting to be confirmed). `height` is how
 /// raised it is: 0 resting just above the poster, 1 hovered, 2 pressed (and
-/// anything in between, as it springs). Put it in a glass_slot.
+/// anything in between, as it springs). `content` is built for how much it
+/// has grown (1 at rest), so its icon grows with it. Put it in a glass_slot.
 fn glass_button(
     id: &'static str,
-    content: AnyElement,
+    content: impl FnOnce(f32) -> AnyElement,
     size: f32,
     danger: bool,
     dark: bool,
@@ -1412,7 +1422,7 @@ fn glass_button(
             linear_color_stop(gpui_kit::white().opacity(0.28), 0.),
             linear_color_stop(gpui_kit::white().opacity(0.), 0.55),
         )))
-        .child(content)
+        .child(content((size + grow) / size))
 }
 
 /// A glass button's slot: room for it at its biggest (pressed), so nothing
