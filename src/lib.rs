@@ -7,3 +7,4 @@ pub mod launch;
 pub mod layout;
 pub mod restore;
 pub mod scan;
+pub mod settings;

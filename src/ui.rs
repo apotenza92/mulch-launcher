@@ -21,21 +21,23 @@ use mulch_launcher::layout::{
 };
 use mulch_launcher::restore::{Restore, WindowState};
 use mulch_launcher::scan::{self, Action, Art, Game, Launcher, Platform, ScanResult};
+use mulch_launcher::settings::{Settings, ThemeChoice};
 use mulch_manual as manual;
 use mulch_posters as posters;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::rc::Rc;
 
 const APP_NAME: &str = "MulchLauncher";
-const REPO_URL: &str = "https://github.com/apotenza92/mulch-launcher";
 
 /// `restore`: set when restarting after an update, to reopen where the old
 /// copy was, in the background.
 pub fn run(restore: Option<Restore>) {
     gpui_kit::application().with_assets(crate::assets::Assets).run(move |cx| {
         gpui_kit::init(cx);
-        Theme::change(theme_mode(cx.window_appearance()), None, cx);
+        Theme::change(theme_mode(Settings::load().theme, cx.window_appearance()), None, cx);
         finish_theme(cx);
 
         let options = WindowOptions {
@@ -74,7 +76,7 @@ pub fn run(restore: Option<Restore>) {
 pub fn run_installer() {
     gpui_kit::application().with_assets(crate::assets::Assets).run(move |cx| {
         gpui_kit::init(cx);
-        Theme::change(theme_mode(cx.window_appearance()), None, cx);
+        Theme::change(theme_mode(Settings::load().theme, cx.window_appearance()), None, cx);
         finish_theme(cx);
         let options = WindowOptions {
             titlebar: Some(TitlebarOptions { title: Some(APP_NAME.into()), ..TitleBar::title_bar_options() }),
@@ -219,8 +221,7 @@ impl Render for Installer {
             .size_full()
             .bg(theme.background)
             .child(TitleBar::new().bg(gpui_kit::transparent_black()).border_color(gpui_kit::transparent_black()))
-            .child(card_entrance(
-                "installer-body",
+            .child(
                 v_flex()
                     .flex_1()
                     .px_6()
@@ -243,7 +244,7 @@ impl Render for Installer {
                                 .on_click(cx.listener(|this, _, _, cx| this.install(cx))),
                         ),
                     ),
-            ))
+            )
     }
 }
 struct MulchApp {
@@ -260,8 +261,6 @@ struct MulchApp {
     scanning: bool,
     /// The added game whose Remove button was clicked once (the next click removes).
     confirm_remove: Option<String>,
-    /// Each game's hover lift (0 resting, 1 lifted), eased over time.
-    lifts: HashMap<String, Tween>,
     /// Reopening after an update: show the window in the background once it exists.
     restore: Option<Restore>,
     /// An update is installed: restart into it when the user isn't using the app.
@@ -273,21 +272,16 @@ struct MulchApp {
     /// Games still waiting for their poster (being looked up or downloaded):
     /// they show a spinner rather than a stand-in icon until it arrives.
     art_pending: HashSet<String>,
-    /// Each poster button's height (0 resting, 1 hovered, 2 pressed), springing between them.
-    button_heights: HashMap<String, Tween>,
-    /// Games being removed, fading out before they go.
-    leaving: HashMap<String, Tween>,
     /// Each launcher's icon as a one-colour glyph (light ink, dark ink), for poster buttons.
     glyphs: HashMap<Platform, (PathBuf, PathBuf)>,
-    /// When games first appeared: until shortly after, tiles enter one after
-    /// another; later additions just fade straight in.
-    first_shown: Option<std::time::Instant>,
     /// Set by an action's click, so the tile under it doesn't also react.
     action_clicked: bool,
     /// When each game was last played, for sorting most recent first.
     history: History,
-    /// A light/dark switch in progress: from, to, and the blend.
-    theme_fade: Option<(ThemeColor, ThemeColor, Tween)>,
+    /// The theme the user chose (light, dark or following Windows), remembered.
+    settings: Settings,
+    /// The theme button's tooltip text, read as it's drawn so it updates while showing.
+    theme_tip: Rc<Cell<&'static str>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -321,28 +315,28 @@ impl MulchApp {
             launchers: Vec::new(),
             social: Vec::new(),
             add_panel: None,
-            theme_fade: None,
+            settings: Settings::load(),
+            theme_tip: Rc::default(),
             hwnd: None,
             hovered_tile: None,
             scanning: false,
             confirm_remove: None,
-            lifts: HashMap::new(),
             restore,
             update_ready: false,
             active: true,
             checking: false,
             art_pending: HashSet::new(),
-            button_heights: HashMap::new(),
-            leaving: HashMap::new(),
             glyphs: HashMap::new(),
-            first_shown: None,
             action_clicked: false,
             history: History::load(),
             // Coming back to the window (e.g. after playing): re-sort so the
             // game just played is first.
             _subscriptions: vec![
                 // Follow Windows switching between light and dark.
-                cx.observe_window_appearance(window, |app, window, cx| app.fade_theme(window, cx)),
+                cx.observe_window_appearance(window, |app, window, cx| {
+                    app.apply_theme(window, cx);
+                    cx.notify();
+                }),
                 cx.observe_window_activation(window, |app, window, cx| {
                     app.active = window.is_window_active();
                     // An update waiting: restart as soon as the user moves on.
@@ -542,9 +536,6 @@ impl MulchApp {
         // after the scan), so a rescan doesn't blank every tile for a moment.
         let mut shown: HashMap<String, Art> = self.games.drain(..).filter_map(|g| Some((g.id, g.art?))).collect();
         self.games = result.games;
-        if self.first_shown.is_none() && !self.games.is_empty() {
-            self.first_shown = Some(std::time::Instant::now());
-        }
         for game in &mut self.games {
             if !matches!(game.art, Some(Art::Cover(_))) {
                 if let Some(art) = shown.remove(&game.id) {
@@ -583,34 +574,14 @@ impl MulchApp {
         &self,
         game_id: &str,
         which: &'static str,
-        content: impl FnOnce(f32) -> AnyElement,
+        content: AnyElement,
         size: f32,
         danger: bool,
         dark: bool,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let key = format!("{game_id}/{which}");
-        let height = Tween::value(&self.button_heights, &key);
-        let (on_hover, on_down, on_up) = (key.clone(), key.clone(), key);
-        glass_button(which, content, size, danger, dark, height)
-            .on_hover(cx.listener(move |app, hovered: &bool, _, cx| {
-                Tween::spring_to(&mut app.button_heights, &on_hover, if *hovered { 1. } else { 0. }, BUTTON_SPRING);
-                cx.notify();
-            }))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |app, _, _, cx| {
-                    Tween::spring_to(&mut app.button_heights, &on_down, 2., BUTTON_PRESS_SPRING);
-                    cx.notify();
-                }),
-            )
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(move |app, _, _, cx| {
-                    Tween::spring_to(&mut app.button_heights, &on_up, 1., BUTTON_SPRING);
-                    cx.notify();
-                }),
-            )
+        let _ = (game_id, cx);
+        glass_button(which, content, size, danger, dark)
     }
 
     /// Glass buttons over a hovered poster: Play, big, centred; below it one
@@ -631,12 +602,11 @@ impl MulchApp {
                 .glyphs
                 .get(&game.platform)
                 .map(|(on_dark, on_light)| if dark { on_dark } else { on_light }.clone());
-            let content = move |scale: f32| match glyph {
-                Some(glyph) => img(glyph)
-                    .size(px(GLASS_BUTTON * GLYPH_FILL * scale))
-                    .object_fit(ObjectFit::Contain)
-                    .into_any_element(),
-                None => Icon::new(IconName::ExternalLink).size(px(GLASS_BUTTON * ICON_FILL * scale)).into_any_element(),
+            let content = match glyph {
+                Some(glyph) => {
+                    img(glyph).size(px(GLASS_BUTTON * GLYPH_FILL)).object_fit(ObjectFit::Contain).into_any_element()
+                }
+                None => Icon::new(IconName::ExternalLink).size(px(GLASS_BUTTON * ICON_FILL)).into_any_element(),
             };
             let button = self.glass(&game.id, "show-launcher", content, GLASS_BUTTON, false, dark, cx).on_click(
                 cx.listener(move |app, _, window, cx| {
@@ -654,7 +624,7 @@ impl MulchApp {
                 .glass(
                     &game.id,
                     "remove",
-                    |scale| icon_content(IconName::Close, GLASS_BUTTON * scale),
+                    icon_content(IconName::Close, GLASS_BUTTON),
                     GLASS_BUTTON,
                     confirming,
                     dark,
@@ -676,20 +646,15 @@ impl MulchApp {
 
         // Play, big, in the middle of the space above the bottom row.
         let (width, height) = size;
-        let half = (GLASS_PLAY_BUTTON + GLASS_PRESS_GROW) / 2.;
-        let row = GLASS_INSET + GLASS_BUTTON + GLASS_PRESS_GROW;
+        let half = GLASS_PLAY_BUTTON / 2.;
+        let row = GLASS_INSET + GLASS_BUTTON;
         let (x, y) = (width / 2., (height - row) / 2.);
         let g = game.clone();
         let play = self
             .glass(
                 &game.id,
                 "play",
-                |scale| {
-                    Icon::empty()
-                        .path("mulch/play-filled.svg")
-                        .size(px(GLASS_PLAY_BUTTON * ICON_FILL * scale))
-                        .into_any_element()
-                },
+                Icon::empty().path("mulch/play-filled.svg").size(px(GLASS_PLAY_BUTTON * ICON_FILL)).into_any_element(),
                 GLASS_PLAY_BUTTON,
                 false,
                 dark,
@@ -823,30 +788,19 @@ impl MulchApp {
         .detach();
     }
 
-    /// Fades the game out, then removes it.
+    /// Removes a game added by hand.
     fn remove_manual(&mut self, exe: PathBuf, cx: &mut Context<Self>) {
         let id = self
             .games
             .iter()
             .find(|g| matches!(&g.launch, Action::Exe { path, .. } if *path == exe))
             .map(|g| g.id.clone());
-        if let Some(id) = &id {
-            Tween::go(&mut self.leaving, id, 1., LEAVE_DURATION);
-            cx.notify();
+        if let Some(id) = id {
+            self.games.retain(|g| g.id != id);
         }
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(LEAVE_DURATION).await;
-            let _ = manual::remove(&exe);
-            this.update(cx, |app, cx| {
-                if let Some(id) = id {
-                    app.games.retain(|g| g.id != id);
-                    app.leaving.remove(&id);
-                }
-                app.rescan(cx);
-            })
-            .ok();
-        })
-        .detach();
+        let _ = manual::remove(&exe);
+        self.rescan(cx);
+        cx.notify();
     }
 
     fn title_bar(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -869,8 +823,8 @@ impl MulchApp {
             .into_any_element()
     }
 
-    /// Add a game, in the title bar's left corner. (The library re-checks
-    /// itself, and the theme follows Windows.) Drawn on a layer above the title
+    /// Add a game and the theme, in the title bar's left corner. (The library
+    /// re-checks itself.) Drawn on a layer above the title
     /// bar, which claims its own clicks (the title bar is the drag area).
     fn title_buttons(&self, cx: &mut Context<Self>) -> AnyElement {
         let add = quick_tooltip(
@@ -882,27 +836,29 @@ impl MulchApp {
                 .icon(IconName::Plus)
                 .on_click(cx.listener(|app, _, _, cx| app.open_add_panel(cx))),
         );
-        // The source on GitHub, beside the window controls on the right.
-        let github = quick_tooltip(
-            "github-tip",
-            "MulchLauncher on GitHub",
-            Button::new("github")
-                .ghost()
-                .small()
-                .icon(Icon::empty().path("mulch/github.svg"))
-                .on_click(|_, _, cx| cx.open_url(REPO_URL)),
-        );
-        let github = deferred(
-            h_flex()
-                .id("title-github")
-                .occlude()
-                .absolute()
-                .top_0()
-                .right(px(WINDOW_CONTROLS_WIDTH + 12. + 4.))
-                .h(px(TITLE_BAR_HEIGHT))
-                .items_center()
-                .child(github),
-        );
+        let (theme_icon, theme_tip) = match self.settings.theme {
+            ThemeChoice::System => (Icon::empty().path("mulch/monitor.svg"), "Theme: same as Windows"),
+            ThemeChoice::Light => (Icon::new(IconName::Sun), "Theme: light"),
+            ThemeChoice::Dark => (Icon::new(IconName::Moon), "Theme: dark"),
+        };
+        // Its tooltip reads the current text as it's drawn, so it changes on
+        // click while still showing.
+        self.theme_tip.set(theme_tip);
+        let tip = self.theme_tip.clone();
+        let theme = div()
+            .id("theme-tip")
+            .child(
+                Button::new("theme")
+                    .ghost()
+                    .small()
+                    .icon(theme_icon)
+                    .on_click(cx.listener(|app, _, window, cx| app.cycle_theme(window, cx))),
+            )
+            .tooltip(move |window, cx| {
+                let tip = tip.clone();
+                Tooltip::element(move |_, _| tip.get()).build(window, cx)
+            })
+            .tooltip_show_delay(TOOLTIP_DELAY);
         let left = deferred(
             h_flex()
                 .id("title-buttons")
@@ -912,43 +868,24 @@ impl MulchApp {
                 .left(px(TITLE_BUTTONS_INSET))
                 .h(px(TITLE_BAR_HEIGHT))
                 .items_center()
-                .child(add),
+                .gap_1()
+                .child(add)
+                .child(theme),
         );
-        // A full-width layer, so the GitHub button can sit against the right edge.
-        div().absolute().top_0().left_0().w_full().h(px(TITLE_BAR_HEIGHT)).child(left).child(github).into_any_element()
+        left.into_any_element()
     }
-    /// Applies Windows' light or dark mode.
+    /// Applies the chosen theme (for "same as Windows", whichever Windows is using).
     fn apply_theme(&self, window: &mut Window, cx: &mut Context<Self>) {
-        Theme::change(theme_mode(window.appearance()), Some(window), cx);
+        Theme::change(theme_mode(self.settings.theme, window.appearance()), Some(window), cx);
         finish_theme(cx);
     }
 
-    /// Switches to Windows' current light or dark mode, blending the colours over a moment.
-    fn fade_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let from = self
-            .theme_fade
-            .as_ref()
-            .map_or_else(|| cx.theme().colors, |(from, to, fade)| blend_colors(from, to, fade.now()));
+    /// The theme button: same as Windows, then light, then dark, then back.
+    fn cycle_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings.theme = self.settings.theme.next();
+        self.settings.save();
         self.apply_theme(window, cx);
-        let to = cx.theme().colors;
-        let fade = Tween { from: 0., to: 1., since: std::time::Instant::now(), duration: THEME_FADE, spring: false };
-        self.theme_fade = Some((from, to, fade));
-        Theme::global_mut(cx).colors = from;
         cx.notify();
-    }
-
-    /// Steps a theme fade on (each frame while one is running).
-    fn step_theme_fade(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((from, to, fade)) = self.theme_fade else { return };
-        let colors = if fade.done() { to } else { blend_colors(&from, &to, fade.now()) };
-        let theme = Theme::global_mut(cx);
-        theme.colors = colors;
-        theme.tokens.background = colors.background.into();
-        if fade.done() {
-            self.theme_fade = None;
-        } else {
-            window.request_animation_frame();
-        }
     }
 
     /// How many games were played in the last week, the last month (but not
@@ -1045,9 +982,7 @@ impl MulchApp {
                 .items_center()
                 .justify_center()
                 .bg(with_alpha(gpui_kit::black(), if theme.mode.is_dark() { 0.55 } else { 0.25 }))
-                .with_animation("add-backdrop-fade", Animation::new(CARD_ENTRANCE), |b, t| b.opacity(t.min(1.) * 1.))
-                .child(card_entrance(
-                    "add-card",
+                .child(
                     glass_card(cx)
                         .w(px(540.))
                         .p(px(28.))
@@ -1076,7 +1011,7 @@ impl MulchApp {
                                         }),
                                 ),
                         ),
-                )),
+                ),
         )
         .with_priority(4)
         .into_any_element()
@@ -1085,9 +1020,9 @@ impl MulchApp {
         let (width, height) = (layout.tile_width, layout.tile_width * COVER_ASPECT);
 
         let clicked = game.clone();
-        let lift = Tween::value(&self.lifts, &game.id);
-        // Glass buttons fade in over the poster while it's hovered.
-        let actions = (lift > 0.).then(|| self.poster_actions(game, (width, height), cx).opacity(lift.min(1.)));
+        let hovered = self.hovered_tile == Some(ix);
+        // Its buttons show over the poster the moment it's hovered.
+        let actions = hovered.then(|| self.poster_actions(game, (width, height), cx));
 
         let theme = cx.theme();
         let poster = div().absolute().top_0().left_0().size_full().rounded(px(TILE_RADIUS)).bg(theme.muted).child(
@@ -1106,17 +1041,11 @@ impl MulchApp {
         );
 
         // The full name shows on hover only when it's cut short.
-        let hovered = self.hovered_tile == Some(ix);
-        // How much the hovered poster grows on each side.
-        let grow_x = width * HOVER_GROW * lift;
-        let grow_y = grow_x * COVER_ASPECT;
         // How far a hovered, cut-short name slides to show its end.
         let overflow = hovered
             .then(|| text_width(&game.name, window, cx) - width)
             .filter(|o| *o > 0.)
             .map(|o| o + MARQUEE_END_ROOM);
-        let leaving = Tween::value(&self.leaving, &game.id);
-        let staggered = self.first_shown.is_none_or(|at| at.elapsed() < STAGGER_WINDOW);
         div()
             .id(("game", ix))
             .relative()
@@ -1133,7 +1062,6 @@ impl MulchApp {
                     if !*hovered && app.confirm_remove.as_deref() == Some(id.as_str()) {
                         app.confirm_remove = None;
                     }
-                    Tween::spring_to(&mut app.lifts, &id, if *hovered { 1. } else { 0. }, LIFT_DURATION);
                     cx.notify();
                 })
             })
@@ -1147,19 +1075,14 @@ impl MulchApp {
                 }
             }))
             .child(
-                // Hovered, the poster grows a little, centred where it is.
-                div().relative().w(px(width)).h(px(height)).child(
-                    div()
-                        .absolute()
-                        .top(px(-grow_y))
-                        .left(px(-grow_x))
-                        .w(px(width + 2. * grow_x))
-                        .h(px(height + 2. * grow_y))
-                        .overflow_hidden()
-                        .rounded(px(TILE_RADIUS))
-                        .bg(theme.muted)
-                        .child(poster),
-                ),
+                div()
+                    .relative()
+                    .w(px(width))
+                    .h(px(height))
+                    .overflow_hidden()
+                    .rounded(px(TILE_RADIUS))
+                    .bg(theme.muted)
+                    .child(poster),
             )
             // The buttons sit above the poster, not clipped to its edges.
             .children(actions.map(|actions| {
@@ -1168,15 +1091,8 @@ impl MulchApp {
             .child({
                 // One line, cut short with "…"; while hovered, a name that's cut
                 // short slides along to show the rest, and back.
-                // Centred under the poster; moves down as it grows, so it stays clear.
-                let line = div()
-                    .relative()
-                    .top(px(grow_y))
-                    .h(px(NAME_LINE_HEIGHT))
-                    .mt_2()
-                    .text_sm()
-                    .font_medium()
-                    .overflow_hidden();
+                // Centred under the poster.
+                let line = div().h(px(NAME_LINE_HEIGHT)).mt_2().text_sm().font_medium().overflow_hidden();
                 match overflow {
                     Some(overflow) => line.child(div().whitespace_nowrap().child(game.name.clone()).with_animation(
                         ElementId::Name(format!("marquee-{}", game.id).into()),
@@ -1187,104 +1103,12 @@ impl MulchApp {
                 }
             })
             .h(px(height + LABEL_HEIGHT))
-            // Tiles fade and rise into place when they first appear, one
-            // shortly after another.
-            // Removed: fades and sinks away.
-            .when(leaving > 0., |tile| tile.opacity(1. - leaving).top(px(ENTER_RISE * leaving)))
-            .with_animation(
-                ElementId::Name(format!("enter-{}", game.id).into()),
-                entrance(if staggered { ix } else { 0 }),
-                |tile, t| tile.opacity(t).top(px(ENTER_RISE * (1. - t))),
-            )
             .into_any_element()
     }
 }
 
-/// A value easing from where it was toward a target (0 to 1).
-#[derive(Clone, Copy)]
-struct Tween {
-    from: f32,
-    to: f32,
-    since: std::time::Instant,
-    duration: std::time::Duration,
-    /// Springy (a gentle overshoot as it settles, like Apple's UI) rather than a plain ease-out.
-    spring: bool,
-}
-
-impl Tween {
-    fn now(&self) -> f32 {
-        let t = (self.since.elapsed().as_secs_f32() / self.duration.as_secs_f32()).min(1.);
-        let eased = if self.spring { spring(t) } else { ease_out_quint()(t) };
-        self.from + (self.to - self.from) * eased
-    }
-
-    /// Starts springing `id` toward `to` from wherever it is now.
-    fn spring_to(tweens: &mut HashMap<String, Tween>, id: &str, to: f32, duration: std::time::Duration) {
-        let from = Tween::value(tweens, id);
-        tweens.insert(id.to_string(), Tween { from, to, since: std::time::Instant::now(), duration, spring: true });
-    }
-
-    fn done(&self) -> bool {
-        self.since.elapsed() >= self.duration
-    }
-
-    /// The value for `id` (0 if it has none).
-    fn value(tweens: &HashMap<String, Tween>, id: &str) -> f32 {
-        tweens.get(id).map_or(0., Tween::now)
-    }
-
-    /// Starts easing `id` toward `to` from wherever it is now.
-    fn go(tweens: &mut HashMap<String, Tween>, id: &str, to: f32, duration: std::time::Duration) {
-        let from = Tween::value(tweens, id);
-        tweens.insert(id.to_string(), Tween { from, to, since: std::time::Instant::now(), duration, spring: false });
-    }
-
-    /// Whether any are still moving (keeps finished ones).
-    fn tidy_up(tweens: &mut HashMap<String, Tween>) -> bool {
-        tweens.values().any(|t| !t.done())
-    }
-
-    /// Forgets finished tweens resting at 0; returns whether any are still moving.
-    fn tidy(tweens: &mut HashMap<String, Tween>) -> bool {
-        tweens.retain(|_, t| !(t.done() && t.to == 0.));
-        tweens.values().any(|t| !t.done())
-    }
-}
-
-/// A critically-damped-ish spring from 0 to 1 over `t` in 0..1: quick to
-/// start, overshooting by about 6% and settling, as Apple's animations do.
-fn spring(t: f32) -> f32 {
-    if t >= 1. { 1. } else { 1. - (-7. * t).exp() * (8. * t).cos() }
-}
-
-/// How long a theme change blends, and a removed game fades.
-const THEME_FADE: std::time::Duration = std::time::Duration::from_millis(320);
-const LEAVE_DURATION: std::time::Duration = std::time::Duration::from_millis(260);
-/// How long after games first appear that tiles still enter one by one.
-const STAGGER_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
-
 /// Corner rounding for posters, panels and cards.
 const TILE_RADIUS: f32 = 8.;
-
-/// A hovered poster grows by this share of its width on each side.
-const HOVER_GROW: f32 = 0.03;
-/// How quickly a hovered poster grows (and its buttons appear).
-const LIFT_DURATION: std::time::Duration = std::time::Duration::from_millis(520);
-/// Tiles' entrance: how far they rise, for how long, and the stagger between them.
-const ENTER_RISE: f32 = 12.;
-const ENTER_MS: f32 = 380.;
-const ENTER_STAGGER_MS: f32 = 25.;
-/// Tiles after this many all enter together, so a big library isn't slow to appear.
-const ENTER_STAGGERED: usize = 24;
-
-/// The entrance animation for the tile at `ix`: it waits its turn, then
-/// eases in.
-fn entrance(ix: usize) -> Animation {
-    let delay = ix.min(ENTER_STAGGERED) as f32 * ENTER_STAGGER_MS;
-    let total = delay + ENTER_MS;
-    Animation::new(std::time::Duration::from_millis(total as u64))
-        .with_easing(move |t| ease_out_quint()(((t * total - delay) / ENTER_MS).clamp(0., 1.)))
-}
 
 /// A game name's line under its tile (text_sm).
 const NAME_LINE_HEIGHT: f32 = 20.;
@@ -1343,45 +1167,15 @@ fn with_alpha(color: Hsla, alpha: f32) -> Hsla {
     Hsla { a: alpha, ..color }
 }
 
-/// Theme colours part-way between two themes (`t` from 0 to 1).
-fn blend_colors(from: &ThemeColor, to: &ThemeColor, t: f32) -> ThemeColor {
-    let mix = |a: Hsla, b: Hsla| {
-        let (a, b) = (Rgba::from(a), Rgba::from(b));
-        let m = |x: f32, y: f32| x + (y - x) * t;
-        Hsla::from(Rgba { r: m(a.r, b.r), g: m(a.g, b.g), b: m(a.b, b.b), a: m(a.a, b.a) })
-    };
-    let mut out = *to;
-    macro_rules! blend { ($($field:ident),*) => { $(out.$field = mix(from.$field, to.$field);)* } }
-    blend!(
-        background,
-        foreground,
-        muted,
-        muted_foreground,
-        popover,
-        popover_foreground,
-        border,
-        list_hover,
-        title_bar,
-        primary,
-        primary_foreground,
-        primary_hover,
-        secondary,
-        secondary_foreground,
-        secondary_hover,
-        accent,
-        accent_foreground,
-        danger,
-        ring,
-        input
-    );
-    out
-}
-
-/// Light or dark, following Windows.
-fn theme_mode(windows: WindowAppearance) -> ThemeMode {
-    match windows {
-        WindowAppearance::Dark | WindowAppearance::VibrantDark => ThemeMode::Dark,
-        _ => ThemeMode::Light,
+/// Light or dark: as chosen, or following Windows.
+fn theme_mode(choice: ThemeChoice, windows: WindowAppearance) -> ThemeMode {
+    match choice {
+        ThemeChoice::Light => ThemeMode::Light,
+        ThemeChoice::Dark => ThemeMode::Dark,
+        ThemeChoice::System => match windows {
+            WindowAppearance::Dark | WindowAppearance::VibrantDark => ThemeMode::Dark,
+            _ => ThemeMode::Light,
+        },
     }
 }
 
@@ -1451,120 +1245,60 @@ fn text_width(text: &str, window: &Window, cx: &App) -> f32 {
     f32::from(window.text_system().shape_line(SharedString::from(text.to_string()), font_size, &[run], None).width)
 }
 
-/// A round glass button over a poster, in the theme's style: frosted white
-/// with a dark icon in light mode, dark glass with a white icon in dark mode.
-/// `danger` tints it red (a remove waiting to be confirmed). `height` is how
-/// raised it is: 0 resting just above the poster, 1 hovered, 2 pressed (and
-/// anything in between, as it springs). `content` is built for how much it
-/// has grown (1 at rest), so its icon grows with it. Put it in a glass_slot.
-fn glass_button(
-    id: &'static str,
-    content: impl FnOnce(f32) -> AnyElement,
-    size: f32,
-    danger: bool,
-    dark: bool,
-    height: f32,
-) -> Stateful<Div> {
-    let (glass, ink, edge) = if dark {
-        // Frosted charcoal rather than clear black.
-        (gpui_kit::hsla(240. / 360., 0.06, 0.16, 1.), gpui_kit::white(), gpui_kit::white().opacity(0.4))
-    } else {
-        (gpui_kit::white(), gpui_kit::black().opacity(0.8), gpui_kit::black().opacity(0.12))
-    };
-    let (fill, hover, ink, glow) = if danger {
-        (gpui_kit::red().opacity(0.75), gpui_kit::red().opacity(0.95), gpui_kit::white(), gpui_kit::red().opacity(0.7))
+/// A round button over a poster, in the theme's style: white with a dark icon
+/// in light mode, charcoal with a white icon in dark mode. `danger` makes it
+/// red (a remove waiting to be confirmed). Solid, and it changes colour the
+/// instant it's hovered or pressed: nothing animates.
+fn glass_button(id: &'static str, content: AnyElement, size: f32, danger: bool, dark: bool) -> Stateful<Div> {
+    let shade = |l: f32| gpui_kit::hsla(240. / 360., 0.06, l, 1.);
+    let (fill, hover, pressed, ink, edge) = if danger {
+        let alarm = |l: f32| gpui_kit::hsla(0., 0.72, l, 1.);
+        (alarm(0.5), alarm(0.44), alarm(0.38), gpui_kit::white(), alarm(0.6))
     } else if dark {
-        (glass.opacity(0.72), glass.opacity(0.88), ink, gpui_kit::white().opacity(0.45))
+        (shade(0.16), shade(0.24), shade(0.3), gpui_kit::white(), shade(0.36))
     } else {
-        (glass.opacity(0.7), glass.opacity(0.95), ink, gpui_kit::white().opacity(0.9))
+        (gpui_kit::white(), shade(0.93), shade(0.86), shade(0.15), shade(0.85))
     };
-    let raised = height.clamp(0., 1.);
-    let pressed = (height - 1.).max(0.);
-    let grow = GLASS_GROW * height.min(1.) + (GLASS_PRESS_GROW - GLASS_GROW) * pressed;
     div()
         .id(id)
-        .relative()
-        .size(px(size + grow))
+        .size(px(size))
         .flex()
         .items_center()
         .justify_center()
         .rounded_full()
-        .bg(mix(fill, hover, raised))
+        .bg(fill)
         .border_1()
-        .border_color(mix(edge, gpui_kit::white().opacity(0.75), raised))
-        .shadow(bevel(height, glow))
+        .border_color(edge)
+        .shadow(vec![BoxShadow {
+            color: gpui_kit::black().opacity(0.35),
+            offset: point(px(0.), px(4.)),
+            blur_radius: px(12.),
+            spread_radius: px(0.),
+            inset: false,
+        }])
         .text_color(ink)
-        // Glassy: light catching the top of the dome.
-        .child(div().absolute().top_0().left_0().size_full().rounded_full().bg(linear_gradient(
-            180.,
-            linear_color_stop(gpui_kit::white().opacity(0.28), 0.),
-            linear_color_stop(gpui_kit::white().opacity(0.), 0.55),
-        )))
-        .child(content((size + grow) / size))
+        .hover(move |style| style.bg(hover))
+        .active(move |style| style.bg(pressed))
+        .child(content)
 }
 
-/// A glass button's slot: room for it at its biggest (pressed), so nothing
-/// around it moves as it springs. Only the button itself takes the mouse.
+/// A button's slot (only the button itself takes the mouse).
 fn glass_slot(size: f32, button: impl IntoElement) -> Div {
-    div().size(px(size + GLASS_PRESS_GROW)).flex().items_center().justify_center().child(button)
+    div().size(px(size)).flex().items_center().justify_center().child(button)
 }
-
 /// An icon sized for a glass button.
 fn icon_content(icon: IconName, size: f32) -> AnyElement {
     Icon::new(icon).size(px(size * ICON_FILL)).into_any_element()
 }
 
-/// Colour part-way from `a` to `b` (`t` from 0 to 1, a little past for springs).
-fn mix(a: Hsla, b: Hsla, t: f32) -> Hsla {
-    let (a, b) = (Rgba::from(a), Rgba::from(b));
-    let m = |x: f32, y: f32| (x + (y - x) * t).clamp(0., 1.);
-    Hsla::from(Rgba { r: m(a.r, b.r), g: m(a.g, b.g), b: m(a.b, b.b), a: m(a.a, b.a) })
-}
 /// How much of a glass button its icon fills, and a launcher glyph (tight-cropped, so a touch less).
 const ICON_FILL: f32 = 0.54;
-/// How much a glass button grows when hovered.
-const GLASS_GROW: f32 = 12.;
-/// Pressed, it grows further still (always from its centre).
-const GLASS_PRESS_GROW: f32 = 18.;
-/// How long a button takes to spring to hovered or resting, and to pressed.
-const BUTTON_SPRING: std::time::Duration = std::time::Duration::from_millis(480);
-const BUTTON_PRESS_SPRING: std::time::Duration = std::time::Duration::from_millis(340);
 const GLYPH_FILL: f32 = 0.5;
 
 /// Glyph ink: white on dark glass, near-black on light glass (as the buttons' icons).
 const GLYPH_ON_DARK: [u8; 3] = [255, 255, 255];
 const GLYPH_ON_LIGHT: [u8; 3] = [40, 40, 40];
 
-/// A glass button's shadows by height (0 resting just above the poster,
-/// 1 hovered, 2 pressed, blended in between): a domed bevel (bright top
-/// edge, darker bottom) and a drop shadow that falls further and softer the
-/// higher it is, plus a glow as it rises.
-fn bevel(height: f32, glow: Hsla) -> Vec<BoxShadow> {
-    let shadow = |color: Hsla, y: f32, blur: f32, spread: f32, inset: bool| BoxShadow {
-        color,
-        offset: point(px(0.), px(y)),
-        blur_radius: px(blur),
-        spread_radius: px(spread),
-        inset,
-    };
-    // Per height: far shadow (offset, blur, opacity), near shadow, top light, bottom shade.
-    const LEVELS: [[f32; 8]; 3] = [
-        [8., 14., 0.4, 2., 4., 0.25, 0.4, 0.18],
-        [16., 24., 0.5, 5., 8., 0.3, 0.6, 0.28],
-        [26., 34., 0.55, 8., 12., 0.3, 0.7, 0.32],
-    ];
-    let h = height.clamp(0., 2.2);
-    let (lo, t) = if h <= 1. { (0, h) } else { (1, (h - 1.).min(1.2)) };
-    let v: Vec<f32> = (0..8).map(|i| LEVELS[lo][i] + (LEVELS[lo + 1][i] - LEVELS[lo][i]) * t).collect();
-    let (light, dark) = (gpui_kit::white(), gpui_kit::black());
-    vec![
-        shadow(dark.opacity(v[2]), v[0], v[1], -2., false),
-        shadow(dark.opacity(v[5]), v[3], v[4], 0., false),
-        shadow(light.opacity(v[6]), 2., 1., 0., true),
-        shadow(dark.opacity(v[7]), -3., 4., 0., true),
-        shadow(glow.opacity(h.min(1.)), 0., 22., 1., false),
-    ]
-}
 /// Adds a quick tooltip (after `TOOLTIP_DELAY`).
 fn with_tooltip(element: Stateful<Div>, text: impl Into<SharedString>) -> Stateful<Div> {
     let text: SharedString = text.into();
@@ -1600,13 +1334,6 @@ fn glass_card(cx: &App) -> Div {
                 inset: true,
             },
         ])
-}
-
-/// A card's entrance: it springs up into place as it fades in.
-fn card_entrance<E: Styled + IntoElement + 'static>(id: &'static str, card: E) -> AnimationElement<E> {
-    card.with_animation(id, Animation::new(CARD_ENTRANCE).with_easing(spring), |card, t| {
-        card.opacity((t * 2.).min(1.)).top(px(CARD_RISE * (1. - t)))
-    })
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -1666,8 +1393,6 @@ const ACCENT_FROM: Hsla = Hsla { h: 222. / 360., s: 0.95, l: 0.62, a: 1. };
 const ACCENT_TO: Hsla = Hsla { h: 268. / 360., s: 0.85, l: 0.64, a: 1. };
 /// Panels: corner rounding, entrance, and pill buttons' height.
 const CARD_RADIUS: f32 = 20.;
-const CARD_RISE: f32 = 18.;
-const CARD_ENTRANCE: std::time::Duration = std::time::Duration::from_millis(520);
 const PILL_HEIGHT: f32 = 36.;
 
 fn check_row(
@@ -1707,10 +1432,6 @@ fn run_action(action: &Action, name: &str, window: &mut Window, cx: &mut App) {
 impl Render for MulchApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.update_min_width(window);
-        self.step_theme_fade(window, cx);
-        if Tween::tidy(&mut self.lifts) | Tween::tidy(&mut self.button_heights) | Tween::tidy_up(&mut self.leaving) {
-            window.request_animation_frame();
-        }
         let viewport = window.viewport_size();
         let layout = grid_layout(&self.recency_groups(), f32::from(viewport.width) - GRID_MARGIN_X * 2.);
         let title_bar = self.title_bar(cx);
@@ -1723,9 +1444,15 @@ impl Render for MulchApp {
             let mut rows = Vec::new();
             for &size in &section.rows {
                 let rest = tiles.split_off(size.min(tiles.len()));
-                rows.push(h_flex().items_start().gap(px(GRID_GAP)).children(std::mem::replace(&mut tiles, rest)));
+                rows.push(
+                    h_flex()
+                        .items_start()
+                        .gap(px(GRID_GAP))
+                        .justify_center()
+                        .children(std::mem::replace(&mut tiles, rest)),
+                );
             }
-            // Labels and rows start at the grid's left edge.
+            // Each row and heading is centred.
             sections.push(
                 v_flex()
                     .gap(px(GRID_GAP))
@@ -1735,6 +1462,7 @@ impl Render for MulchApp {
                                 .h(px(HEADING_HEIGHT - GRID_GAP))
                                 .flex()
                                 .items_end()
+                                .justify_center()
                                 .text_xl()
                                 .font_bold()
                                 .child(GROUP_NAMES[section.group]),

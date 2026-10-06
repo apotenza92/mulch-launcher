@@ -1,5 +1,5 @@
 //! The UI kit's built-in assets, plus a filled play icon of our own, based on
-//! Lucide's (see `assets/icons/LICENSE-LUCIDE`), and the GitHub mark.
+//! Lucide's (see `assets/icons/LICENSE-LUCIDE`), and Lucide's monitor (for the theme button).
 
 use gpui_kit::{AssetSource, SharedString};
 use std::borrow::Cow;
@@ -8,7 +8,7 @@ pub struct Assets;
 
 const OWN: &[(&str, &[u8])] = &[
     ("mulch/play-filled.svg", include_bytes!("../assets/icons/play-filled.svg")),
-    ("mulch/github.svg", include_bytes!("../assets/icons/github.svg")),
+    ("mulch/monitor.svg", include_bytes!("../assets/icons/monitor.svg")),
 ];
 
 impl AssetSource for Assets {
