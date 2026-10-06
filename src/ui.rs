@@ -866,10 +866,10 @@ impl MulchApp {
 
     fn title_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
-        // Clear, like the rest of the glass, and no line under it.
+        // The window's own background, with a line under it.
         TitleBar::new()
             .bg(gpui_kit::transparent_black())
-            .border_color(gpui_kit::transparent_black())
+            .border_color(theme.border)
             .child(
                 h_flex()
                     .flex_1()
@@ -915,6 +915,9 @@ impl MulchApp {
         h_flex()
             .h(px(TOOLBAR_HEIGHT))
             .flex_shrink_0()
+            // A line under it, like the title bar's.
+            .border_b_1()
+            .border_color(cx.theme().border)
             .px(px(GRID_MARGIN_X))
             .items_center()
             .child(side().child(theme))
