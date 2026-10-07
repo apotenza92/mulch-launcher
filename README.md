@@ -4,7 +4,7 @@
 
 <p align="center">One launcher for all your games.</p>
 
-<p align="center"><a href="https://apps.microsoft.com/detail/9N1BPQC9G6ZW?mode=direct"><img src="https://get.microsoft.com/images/en-us%20dark.svg" width="200" alt="Get it from Microsoft"></a></p>
+<p align="center"><a href="https://apps.microsoft.com/detail/9N541CCDWDQH?mode=direct"><img src="https://get.microsoft.com/images/en-us%20dark.svg" width="200" alt="Get it from Microsoft"></a></p>
 
 <p align="center">Windows only, for now.</p>
 

@@ -32,7 +32,11 @@ No other products' names (Store policy 10.1.3).
 
 ## Category
 
-Listed as a **game** (MSIX or PWA game): certification counts a game launcher as having game functionality (policy 10.1.21), so it must be in a game category.
+Listed as an **app**, category **Utilities & tools**. Certification has flipped on this under policy 10.1.21: the app entry 9NQK96N5M6PH was told to use a game category (2026-10-06), then the game entry 9N1BPQC9G6ZW was told it has no game functionality and must be an app (2026-10-07). Following the most recent instruction, the current entry is 9N541CCDWDQH (MSIX or PWA app), submitted 2026-10-07. No subcategory: Utilities + tools only offers Backup + manage and File managers.
+
+## Notes for certification
+
+> MulchLauncher is a utility that organises and launches games the user already has installed through other launchers. It is not a game itself. Previous reviews gave conflicting category instructions under policy 10.1.21: product 9NQK96N5M6PH (app category) was told to use a game category, and product 9N1BPQC9G6ZW (game category) was told it has no game functionality and to create a new app in an app category. This submission follows the most recent instruction and is listed as an app under Utilities & tools.
 
 ## Pricing and availability
 
@@ -44,17 +48,13 @@ Listed as a **game** (MSIX or PWA game): certification counts a game launcher as
 
 ## Privacy policy URL
 
-Required because the app connects to the internet (it downloads posters).
+Required because the app connects to the internet (it downloads posters). Properties answer: "Yes, my product uses personal information".
 
-Text: `packaging/store/listing/privacy.md`.
-
-Proposed URL (publish privacy.md there as an HTML page on the existing GitHub Pages site before submitting):
-
-https://apotenza92.github.io/mulch-launcher/privacy.html
+https://github.com/apotenza92/mulch-launcher/blob/main/PRIVACY.md
 
 ## Support / website
 
-- Website: https://apotenza92.github.io/mulch-launcher/
+- Website: https://github.com/apotenza92/mulch-launcher
 - Support contact: https://github.com/apotenza92/mulch-launcher/issues
 
 ## Age rating (IARC questionnaire)
@@ -69,15 +69,15 @@ Suggested answers:
 - Digital purchases / in-app purchases: No.
 - Unrestricted internet access (web browser, search engine): No. It only fetches cover images from fixed sources; the user can't browse.
 
-Expected result: the lowest rating (e.g. ESRB Everyone / PEGI 3 / IARC 3+).
+Submitted answers (2026-10-07, IARC 10.3): All Other App Types; Online Content Yes (downloaded box art), violence can be visually depicted, not gory, not strictly cartoony, not the app's purpose; everything else No. Result: IARC 12+, ESRB Teen, PEGI !, USK 12, Russia 18+.
 
 Note on cover art: posters are the official box art of games the user already has installed, fetched by exact title. For mature games (e.g. GTA, Doom) that box art can show weapons or violence. This is content from the user's own library, not the app's, and IARC questions are about the app's own content, so "No" is defensible. If you want to be cautious, answer the violence question as "mild / fantasy violence in imagery" and accept a 7+/12+ rating; a higher rating than needed doesn't block anything, but a too-low one can be challenged later.
 
 ## Restricted capability: runFullTrust
 
-Partner Center asks why the package declares `runFullTrust`. Paste:
+Partner Center asks why the package declares `runFullTrust` (500 characters max). Paste:
 
-> MulchLauncher is a Win32 desktop app (packaged with the Desktop Bridge) and needs runFullTrust to run as one. Its purpose is to list and start games installed by other launchers (Steam, Epic Games, Ubisoft Connect, GOG, Xbox, Battle.net, Rockstar Games and EA). To do this it reads those launchers' install records on the user's PC: their registry entries, manifest and configuration files under Program Files and ProgramData, and the list of installed Microsoft Store/Xbox packages. It starts games by handing the launcher's link (e.g. steam://) to Windows or by running the game's program, and it reads which processes are running to record when a game was last played. These locations and actions are outside the app container, so they are not possible from a sandboxed app. It doesn't install drivers or services, doesn't need administrator rights, and keeps its own data in its package storage.
+> MulchLauncher is a packaged Win32 desktop app that lists and starts games installed by other launchers. It reads their install records (registry, config files under Program Files and ProgramData, installed Store packages), starts games through the launcher's link or the game's program, and checks running processes to record when a game was last played. These are outside the app container. No drivers, services or admin rights; its own data stays in package storage.
 
 ## Screenshots
 
