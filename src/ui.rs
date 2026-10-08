@@ -269,6 +269,8 @@ struct MulchApp {
     /// The game tile under the mouse, which shows its full name.
     hovered_tile: Option<usize>,
     scanning: bool,
+    rescan_requested: bool,
+    artwork_initialized: bool,
     /// The added game whose Remove button was clicked once (the next click removes).
     confirm_remove: Option<String>,
     /// Reopening after an update: show the window in the background once it exists.
@@ -334,6 +336,8 @@ impl MulchApp {
             icon_scale: 1.,
             hovered_tile: None,
             scanning: false,
+            rescan_requested: false,
+            artwork_initialized: false,
             confirm_remove: None,
             restore,
             update_ready: false,
@@ -530,15 +534,16 @@ impl MulchApp {
     /// fills in icons (slower on first run) as a second step.
     fn rescan(&mut self, cx: &mut Context<Self>) {
         if self.scanning {
+            self.rescan_requested = true;
             return;
         }
         self.scanning = true;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx.background_spawn(async move { scan::scan_all(&[]) }).await;
-            let (mut games, mut launchers) = (result.games.clone(), result.launchers.clone());
-            launchers.extend(result.social.iter().cloned());
-            this.update(cx, |app, cx| app.apply(result, cx)).ok();
+            let Ok((mut games, mut launchers)) = this.update(cx, |app, cx| app.apply(result, cx)) else {
+                return;
+            };
 
             let (mut games, launchers) = cx
                 .background_spawn(async move {
@@ -553,24 +558,45 @@ impl MulchApp {
             // the first run, fetched online otherwise, so they arrive last.
             let games = cx
                 .background_spawn(async move {
-                    posters::fill_missing(&mut games);
+                    if !games.is_empty() {
+                        posters::fill_missing(&mut games);
+                    }
                     games
                 })
                 .await;
             this.update(cx, |app, cx| {
                 app.art_pending.clear();
                 app.apply_art(games, launchers, cx);
+                app.scanning = false;
+                if std::mem::take(&mut app.rescan_requested) {
+                    app.rescan(cx);
+                }
             })
             .ok();
         })
         .detach();
     }
 
-    fn apply(&mut self, result: ScanResult, cx: &mut Context<Self>) {
+    fn apply(&mut self, mut result: ScanResult, cx: &mut Context<Self>) -> (Vec<Game>, Vec<Launcher>) {
         mulch_launcher::trace::mark("scan applied");
         // Keep the art already showing (icons and downloaded posters arrive
         // after the scan), so a rescan doesn't blank every tile for a moment.
-        let mut shown: HashMap<String, Art> = self.games.drain(..).filter_map(|g| Some((g.id, g.art?))).collect();
+        let wanted = scan::prepare_artwork_refresh(&mut result.games, &self.games, !self.artwork_initialized);
+        self.artwork_initialized = true;
+        let shown_icons: HashMap<&str, PathBuf> = self
+            .launchers
+            .iter()
+            .chain(&self.social)
+            .filter_map(|launcher| Some((launcher.name, launcher.icon.clone()?)))
+            .collect();
+        let mut wanted_launchers = Vec::new();
+        for launcher in result.launchers.iter_mut().chain(&mut result.social) {
+            if let Some(icon) = shown_icons.get(launcher.name) {
+                launcher.icon = Some(icon.clone());
+            } else {
+                wanted_launchers.push(launcher.clone());
+            }
+        }
         self.games = result.games;
         // So Show in Xbox app opens at once when clicked.
         launch::look_up_xbox_pages(
@@ -582,16 +608,9 @@ impl MulchApp {
                 })
                 .collect(),
         );
-        for game in &mut self.games {
-            if !matches!(game.art, Some(Art::Cover(_))) {
-                if let Some(art) = shown.remove(&game.id) {
-                    game.art = Some(art);
-                }
-            }
-        }
         // Only games with nothing to show yet (new ones) wait for their art;
         // everything already showing stays exactly as it is.
-        self.art_pending = self.games.iter().filter(|g| g.art.is_none()).map(|g| g.id.clone()).collect();
+        self.art_pending = wanted.iter().filter(|g| g.art.is_none()).map(|g| g.id.clone()).collect();
         self.history.sort(&mut self.games);
         self.launchers = result.launchers;
         // Launchers with the most games first; ties alphabetical.
@@ -601,9 +620,9 @@ impl MulchApp {
         launchers.sort_by_cached_key(|l| (std::cmp::Reverse(games_on(l)), l.name.to_lowercase()));
         self.launchers = launchers;
         self.social = result.social;
-        self.scanning = false;
         self.confirm_remove = None;
         cx.notify();
+        (wanted, wanted_launchers)
     }
 
     fn play(&mut self, game: &Game, window: &mut Window, cx: &mut Context<Self>) {
@@ -738,7 +757,9 @@ impl MulchApp {
         let game_art: HashMap<String, Art> = games.into_iter().filter_map(|g| Some((g.id, g.art?))).collect();
         for game in &mut self.games {
             if let Some(art) = game_art.get(&game.id) {
-                game.art = Some(art.clone());
+                if !matches!(game.art, Some(Art::Cover(_))) || matches!(art, Art::Cover(_)) {
+                    game.art = Some(art.clone());
+                }
             }
         }
         let launcher_icons: HashMap<&str, PathBuf> =

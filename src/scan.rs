@@ -3,6 +3,7 @@
 
 pub use mulch_core::{Action, Art, Game, Launcher, Library, Platform, ScanContext};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -31,6 +32,28 @@ pub struct ScanResult {
     /// How long each library took, for keeping startup fast.
     pub timings: Vec<(&'static str, Duration)>,
     pub total: Duration,
+}
+
+pub fn prepare_artwork_refresh(games: &mut [Game], previous: &[Game], initial: bool) -> Vec<Game> {
+    let previous: HashMap<&str, &Game> = previous.iter().map(|game| (game.id.as_str(), game)).collect();
+    let mut wanted = Vec::new();
+    for game in games {
+        let existing = previous.get(game.id.as_str());
+        let unchanged = existing.is_some_and(|existing| existing.name == game.name);
+        let mut refresh = game.clone();
+        if !matches!(game.art, Some(Art::Cover(_))) {
+            if let Some(art) = existing.and_then(|existing| existing.art.as_ref()) {
+                game.art = Some(art.clone());
+            }
+        }
+        if unchanged {
+            refresh.art = game.art.clone();
+        }
+        if (initial || !unchanged) && !matches!(refresh.art, Some(Art::Cover(_))) {
+            wanted.push(refresh);
+        }
+    }
+    wanted
 }
 
 /// Scans every library (or just those whose id is in `only`) in parallel.
@@ -178,6 +201,75 @@ mod tests {
         assert_eq!(tm.process_dirs.len(), 2);
         assert_eq!(tm.other_copies.len(), 1);
         assert_eq!(tm.other_copies[0].0, Platform::Ubisoft);
+    }
+
+    #[test]
+    fn adding_a_game_only_refreshes_its_artwork() {
+        let mut covered = game(Platform::Manual, "Covered", r"C:\covered", None);
+        covered.art = Some(Art::Cover("poster.jpg".into()));
+        let mut icon = game(Platform::Manual, "Icon", r"C:\icon", None);
+        icon.art = Some(Art::Icon("icon.png".into()));
+        let missing = game(Platform::Xbox, "Missing", r"C:\missing", None);
+        let previous = vec![covered, icon, missing];
+        let mut scanned = previous.clone();
+        for game in &mut scanned {
+            game.art = None;
+        }
+        scanned.push(game(Platform::Manual, "New", r"C:\new", None));
+        let wanted = prepare_artwork_refresh(&mut scanned, &previous, false);
+        assert_eq!(wanted.len(), 1);
+        assert_eq!(wanted[0].name, "New");
+        assert!(matches!(&scanned[0].art, Some(Art::Cover(path)) if path == &PathBuf::from("poster.jpg")));
+        assert!(matches!(&scanned[1].art, Some(Art::Icon(path)) if path == &PathBuf::from("icon.png")));
+        assert!(scanned[2].art.is_none());
+    }
+
+    #[test]
+    fn startup_refreshes_cached_icons_but_not_posters() {
+        let mut covered = game(Platform::Manual, "Covered", r"C:\covered", None);
+        covered.art = Some(Art::Cover("poster.jpg".into()));
+        let mut icon = game(Platform::Manual, "Icon", r"C:\icon", None);
+        icon.art = Some(Art::Icon("icon.png".into()));
+        let previous = vec![covered, icon];
+        let mut scanned = previous.clone();
+        for game in &mut scanned {
+            game.art = None;
+        }
+        let wanted = prepare_artwork_refresh(&mut scanned, &previous, true);
+        assert_eq!(wanted.len(), 1);
+        assert_eq!(wanted[0].name, "Icon");
+        assert!(matches!(wanted[0].art, Some(Art::Icon(_))));
+    }
+
+    #[test]
+    fn renamed_games_refresh_without_reusing_the_old_poster() {
+        let mut previous = game(Platform::Manual, "Old", r"C:\game", None);
+        previous.art = Some(Art::Cover("old.jpg".into()));
+        let mut scanned = vec![previous.clone()];
+        scanned[0].name = "New".into();
+        scanned[0].art = None;
+        let wanted = prepare_artwork_refresh(&mut scanned, &[previous], false);
+        assert_eq!(wanted.len(), 1);
+        assert!(wanted[0].art.is_none());
+        assert!(matches!(&scanned[0].art, Some(Art::Cover(path)) if path == &PathBuf::from("old.jpg")));
+    }
+
+    #[test]
+    fn existing_launcher_covers_need_no_artwork_refresh() {
+        let mut scanned = vec![game(Platform::Steam, "Covered", r"C:\covered", None)];
+        scanned[0].art = Some(Art::Cover("launcher.jpg".into()));
+        assert!(prepare_artwork_refresh(&mut scanned, &[], false).is_empty());
+        assert!(prepare_artwork_refresh(&mut scanned, &[], true).is_empty());
+    }
+
+    #[test]
+    fn removing_a_game_does_not_refresh_remaining_artwork() {
+        let previous = vec![
+            game(Platform::Manual, "Removed", r"C:\removed", None),
+            game(Platform::Manual, "Remaining", r"C:\remaining", None),
+        ];
+        let mut scanned = vec![previous[1].clone()];
+        assert!(prepare_artwork_refresh(&mut scanned, &previous, false).is_empty());
     }
 
     #[test]
