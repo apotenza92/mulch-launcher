@@ -12,7 +12,19 @@ One launcher for all your games.
 
 ## Description
 
-One launcher for all your games.
+Certification needs a real description (policy 10.1.4.3: "a few words or just the app title is not sufficient").
+
+MulchLauncher shows all the PC games you have installed in one window, whichever launcher installed them, so you can find and start any of them from one place.
+
+- It finds games installed by Steam, Epic Games, Ubisoft Connect, GOG, the Xbox app, Battle.net, Rockstar Games and the EA app automatically. There's nothing to set up.
+- Each game starts through its own launcher, so sign-ins, updates, cloud saves and overlays work as usual.
+- Games are grouped by when you last played them, most recent first.
+- Every game shows its cover art, and a button opens its page in its own launcher.
+- Add any other game by choosing its program.
+- Light and dark themes, following Windows or your choice.
+- No account and no tracking: your library stays on your PC.
+
+MulchLauncher isn't affiliated with or endorsed by these launchers' makers; their names are trademarks of their respective owners.
 
 ## Product features
 
