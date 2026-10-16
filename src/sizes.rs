@@ -1,4 +1,4 @@
-//! How much disk each game takes: its install folder, measured in the
+//! How much disk each game takes: its own folder, measured in the
 //! background and remembered between runs in `data\sizes.json`, so a size
 //! shows at once and is brought up to date (after updates) each run.
 
@@ -48,13 +48,77 @@ impl Sizes {
     }
 }
 
-/// The folder whose size is the game's. Games added by hand have only the
-/// folder their program is in, which may hold much more than the game.
-pub fn folder(game: &Game) -> Option<&Path> {
-    if game.platform == Platform::Manual {
-        return None;
+/// The folder whose size is the game's: its install folder, or for a game
+/// added by hand, the folder its program is in (see `game_root`). None when
+/// that folder is shared: a drive, a Windows folder, or one holding another
+/// game.
+pub fn folder(game: &Game, games: &[Game]) -> Option<PathBuf> {
+    let dir = game.install_dir.as_deref()?;
+    if game.platform != Platform::Manual {
+        return Some(dir.to_path_buf());
     }
-    game.install_dir.as_deref()
+    let root = game_root(dir);
+    let shared = root.parent().is_none()
+        || shared_folders().iter().any(|shared| same_folder(shared, &root))
+        || games
+            .iter()
+            .filter(|g| g.id != game.id)
+            .filter_map(|g| g.install_dir.as_deref())
+            .any(|other| lowercase(other).starts_with(lowercase(&root)));
+    (!shared).then_some(root)
+}
+
+/// A game's own folder, from the folder its program is in: above the folders
+/// games keep programs in (`bin`, `Binaries\Win64`, ...), and for Unreal
+/// games, above the project folder too (to the one that has `Engine`).
+pub fn game_root(program_dir: &Path) -> PathBuf {
+    const PROGRAM_FOLDERS: [&str; 9] = ["bin", "bin32", "bin64", "binaries", "win32", "win64", "x64", "x86", "x86_64"];
+    let mut root = program_dir;
+    while let (Some(name), Some(parent)) = (root.file_name(), root.parent()) {
+        if !PROGRAM_FOLDERS.contains(&name.to_string_lossy().to_lowercase().as_str()) {
+            break;
+        }
+        root = parent;
+    }
+    if root != program_dir
+        && let Some(parent) = root.parent()
+        && parent.join("Engine").is_dir()
+        && parent.parent().is_some()
+    {
+        root = parent;
+    }
+    root.to_path_buf()
+}
+
+/// Windows' own folders, which hold much more than one game.
+fn shared_folders() -> Vec<PathBuf> {
+    let var = |name: &str| std::env::var_os(name).map(PathBuf::from);
+    let mut folders: Vec<PathBuf> = [
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "ProgramW6432",
+        "SystemRoot",
+        "USERPROFILE",
+        "PUBLIC",
+        "LOCALAPPDATA",
+        "APPDATA",
+    ]
+    .into_iter()
+    .filter_map(var)
+    .collect();
+    if let Some(home) = var("USERPROFILE") {
+        folders.extend(["Desktop", "Downloads", "Documents", "OneDrive"].map(|f| home.join(f)));
+    }
+    folders
+}
+
+fn lowercase(path: &Path) -> PathBuf {
+    PathBuf::from(path.to_string_lossy().to_lowercase())
+}
+
+/// Windows paths ignore case.
+fn same_folder(a: &Path, b: &Path) -> bool {
+    lowercase(a) == lowercase(b)
 }
 
 /// The total size of the files in a folder and everything in it, or None if
@@ -106,6 +170,41 @@ mod tests {
         assert_eq!(format(41_339_633_664), "38.5 GB");
         assert_eq!(format(137_438_953_472), "128 GB");
         assert_eq!(format(1_319_413_953_331), "1.2 TB");
+    }
+
+    fn manual(id: &str, dir: &Path) -> Game {
+        let launch = mulch_core::Action::Uri(String::new());
+        Game::new(id.into(), id.into(), Platform::Manual, Some(dir.to_path_buf()), launch)
+    }
+
+    #[test]
+    fn finds_a_games_own_folder() {
+        let dir = std::env::temp_dir().join(format!("mulch-roots-{}", std::process::id()));
+        let unreal = dir.join("Unreal Game");
+        fs::create_dir_all(unreal.join("Engine")).unwrap();
+        fs::create_dir_all(unreal.join("Project/Binaries/Win64")).unwrap();
+        assert_eq!(game_root(&unreal.join("Project/Binaries/Win64")), unreal);
+        assert_eq!(game_root(&dir.join("Other/bin/x64")), dir.join("Other"));
+        assert_eq!(game_root(&dir.join("Plain")), dir.join("Plain"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn skips_shared_folders() {
+        let games = vec![manual("a", Path::new(r"D:\Games")), manual("b", Path::new(r"D:\Games\Other"))];
+        assert_eq!(folder(&games[0], &games), None);
+        assert_eq!(folder(&games[1], &games), Some(PathBuf::from(r"D:\Games\Other")));
+        assert_eq!(folder(&manual("c", Path::new(r"D:\")), &games), None);
+        let downloads = PathBuf::from(std::env::var_os("USERPROFILE").unwrap()).join("downloads");
+        assert_eq!(folder(&manual("d", &downloads), &games), None);
+        let steam = Game::new(
+            "s".into(),
+            "s".into(),
+            Platform::Steam,
+            Some(r"D:\Games".into()),
+            mulch_core::Action::Uri(String::new()),
+        );
+        assert_eq!(folder(&steam, &games), Some(PathBuf::from(r"D:\Games")));
     }
 
     #[test]

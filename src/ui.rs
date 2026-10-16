@@ -387,7 +387,7 @@ impl MulchApp {
                     app.games
                         .iter()
                         .find(|g| !app.measured.contains(&g.id))
-                        .map(|g| (g.id.clone(), sizes::folder(g).map(PathBuf::from)))
+                        .map(|g| (g.id.clone(), sizes::folder(g, &app.games)))
                 });
                 let Ok(next) = next else { return };
                 let Some((id, folder)) = next else { break };
