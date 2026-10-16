@@ -114,4 +114,4 @@ Suggested set (with captions):
 
 Use `packaging/store/listing/app-tile-300.png` for the Store's 300 x 300 app tile icon. The Store prioritises this listing image over package icons. The matching `app-tile-150.png` and `app-tile-71.png` exports fill the smaller Store display image slots.
 
-`scripts/generate-icons.cjs` renders the listing icon, package assets through 400% scale, target-size light/dark variants, a 1024 px Store master, and the executable's multi-size ICO directly from `assets/brand/logo-store.svg`. Its header lists the install and generation commands. The artwork fills the canvas with one source pixel of clearance for antialiasing, without stretching square artwork on wide tiles.
+`scripts/generate-icons.cjs` renders the listing icon, package assets through 400% scale, target-size light/dark variants, the executable's multi-size ICO and the README logo directly from `assets/brand/logo.svg`. Its header lists the install and generation commands. The artwork fills the canvas with one source pixel of clearance for antialiasing, without stretching square artwork on wide tiles. The tile's corners use the Windows app icon radius (2 px at 48 px).

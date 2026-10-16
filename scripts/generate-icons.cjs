@@ -8,7 +8,8 @@ const root = path.resolve(__dirname, '..');
 const brand = path.join(root, 'assets/brand');
 const assets = path.join(root, 'packaging/store/Assets');
 const listing = path.join(root, 'packaging/store/listing');
-const source = fs.readFileSync(path.join(brand, 'logo-store.svg'), 'utf8');
+const source = fs.readFileSync(path.join(brand, 'logo.svg'), 'utf8');
+// The tile's corner radius is 10/240, the 2px at 48px that Windows app icons use.
 // One pixel of source-space clearance preserves antialiasing at the tile edge.
 const tight = source.replace('viewBox="0 0 256 256"', 'viewBox="7 7 242 242"');
 function render(svg, size) {
@@ -37,7 +38,8 @@ for (const size of sizes) {
 for (const size of [71, 150, 300]) {
   fs.writeFileSync(path.join(listing, `app-tile-${size}.png`), render(tight, size));
 }
-fs.writeFileSync(path.join(brand, 'logo-store-1024.png'), render(tight, 1024));
+// The README logo keeps the source's margin.
+fs.writeFileSync(path.join(brand, 'logo-256.png'), render(source, 256));
 // ICO entries can contain lossless PNGs. Include every Windows target size.
 const frames = sizes.map(size => ({ size, data: render(tight, size) }));
 const header = Buffer.alloc(6 + frames.length * 16);
@@ -54,4 +56,4 @@ frames.forEach(({size, data}, index) => {
   offset += data.length;
 });
 fs.writeFileSync(path.join(brand, 'MulchLauncher.ico'), Buffer.concat([header, ...frames.map(frame => frame.data)]));
-console.log('Generated Store listing, scaled package, theme variants and ICO assets from logo-store.svg.');
+console.log('Generated Store listing, scaled package, theme variants and ICO assets and the README logo from logo.svg.');
