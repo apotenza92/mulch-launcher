@@ -26,7 +26,7 @@ For games that have no cover art on your PC, MulchLauncher looks up a poster fro
 
 These requests contain the game's name or its ID in that store, nothing else about you. Like any internet request, they reveal your IP address to the server, which handles it under its own privacy policy. No cookies or identifiers are sent.
 
-The copy downloaded from GitHub (not the Microsoft Store version) also checks `api.github.com` for a newer release and downloads it from GitHub. The Microsoft Store version is updated by the Store instead.
+The Microsoft Store version is updated by the Store.
 
 Buttons in the app can open web pages or other apps (for example the project's GitHub page, or a game in its own launcher). Those open in your browser or in that app and are covered by their own privacy policies.
 

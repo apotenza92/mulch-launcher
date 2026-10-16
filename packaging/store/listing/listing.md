@@ -99,10 +99,10 @@ Current files:
 
 | File | Size | Qualifies |
 | --- | --- | --- |
-| docs/screenshots/library.png | 968 x 791 | No (too narrow) |
-| docs/screenshots/hover.png | 968 x 791 | No (too narrow) |
+| packaging/store/listing/library-light.png | 1600 x 1200 | Yes |
+| packaging/store/listing/library-dark.png | 1600 x 1200 | Yes |
 
-Neither can be used as is. Recapture with the window at least 1366 px wide (for example 1600 x 900, or a maximised window on a 1080p display). Upscaling the existing files would technically pass but looks soft; better to recapture.
+Captured from version 0.1.9 in light and dark mode with a game hovered, then framed on the built-in Windows 11 wallpaper. The app pixels are preserved at their captured size; other applications are excluded.
 
 Suggested set (with captions):
 
@@ -112,4 +112,6 @@ Suggested set (with captions):
 
 ## Store logos (already in packaging/store/Assets)
 
-Partner Center may also ask for a 1:1 Store display image (300 x 300 minimum) and optional 9:16 / 16:9 promotional art. `assets/brand/logo-512.png` or `logo-1024.png` can be used for the 1:1 image.
+Use `packaging/store/listing/app-tile-300.png` for the Store's 300 x 300 app tile icon. The Store prioritises this listing image over package icons. The matching `app-tile-150.png` and `app-tile-71.png` exports fill the smaller Store display image slots.
+
+`scripts/generate-icons.cjs` renders the listing icon, package assets through 400% scale, target-size light/dark variants, a 1024 px Store master, and the executable's multi-size ICO directly from `assets/brand/logo-store.svg`. Its header lists the install and generation commands. The artwork fills the canvas with one source pixel of clearance for antialiasing, without stretching square artwork on wide tiles.

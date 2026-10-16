@@ -29,6 +29,10 @@ impl ThemeChoice {
 #[serde(default)]
 pub struct Settings {
     pub theme: ThemeChoice,
+    /// A new user's library still needs the programs that look like games
+    /// added: set on first run, cleared once they're added, so quitting
+    /// before then tries again next time.
+    pub add_found_games: bool,
 }
 
 fn path() -> Option<PathBuf> {

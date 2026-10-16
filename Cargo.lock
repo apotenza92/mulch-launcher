@@ -4074,7 +4074,7 @@ dependencies = [
 
 [[package]]
 name = "mulch-launcher"
-version = "0.1.7"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "gpui-kit",
@@ -4092,7 +4092,6 @@ dependencies = [
  "mulch-social",
  "mulch-steam",
  "mulch-ubisoft",
- "mulch-update",
  "mulch-xbox",
  "raw-window-handle",
  "serde",
@@ -4147,15 +4146,6 @@ name = "mulch-ubisoft"
 version = "0.1.0"
 dependencies = [
  "mulch-core",
-]
-
-[[package]]
-name = "mulch-update"
-version = "0.1.0"
-dependencies = [
- "serde_json",
- "sha2 0.10.9",
- "ureq",
 ]
 
 [[package]]

@@ -13,12 +13,10 @@ use gpui_kit::*;
 use mulch_art as art;
 use mulch_discover::Suggestion;
 use mulch_history::{self as history, History};
-use mulch_launcher::install;
 use mulch_launcher::launch;
 use mulch_launcher::layout::{
     COVER_ASPECT, GRID_GAP, GridLayout, HEADING_HEIGHT, LABEL_HEIGHT, TILE_WIDTH, grid_width, layout as grid_layout,
 };
-use mulch_launcher::restore::{Restore, WindowState};
 use mulch_launcher::scan::{self, Action, Art, Game, Launcher, Platform, ScanResult};
 use mulch_launcher::settings::{Settings, ThemeChoice};
 use mulch_manual as manual;
@@ -31,9 +29,7 @@ use std::rc::Rc;
 
 const APP_NAME: &str = "MulchLauncher";
 
-/// `restore`: set when restarting after an update, to reopen where the old
-/// copy was, in the background.
-pub fn run(restore: Option<Restore>) {
+pub fn run() {
     mulch_launcher::trace::mark("creating app");
     let app = gpui_kit::application();
     mulch_launcher::trace::mark("app created");
@@ -50,209 +46,19 @@ pub fn run(restore: Option<Restore>) {
             titlebar: Some(TitlebarOptions { title: Some(APP_NAME.into()), ..TitleBar::title_bar_options() }),
             app_owns_titlebar_drag: true,
             window_background: WindowBackgroundAppearance::Opaque,
-            window_bounds: Some(match restore {
-                Some(r) => {
-                    let bounds = Bounds::new(point(px(r.x), px(r.y)), size(px(r.width), px(r.height)));
-                    if r.state == WindowState::Maximized {
-                        WindowBounds::Maximized(bounds)
-                    } else {
-                        WindowBounds::Windowed(bounds)
-                    }
-                }
-                None => WindowBounds::Windowed(Bounds::centered(None, default_window_size(cx), cx)),
-            }),
-            // Restarted for an update: created hidden, then shown behind the
-            // window the user is in (see update_min_width).
-            show: restore.is_none(),
-            focus: restore.is_none(),
+            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, default_window_size(cx), cx))),
             // The width also grows to fit the toolbar (see `update_min_width`).
             window_min_size: Some(size(px(MIN_WINDOW_WIDTH), px(360.))),
             app_id: Some(APP_NAME.into()),
             ..Default::default()
         };
         mulch_launcher::trace::mark("opening window");
-        gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| MulchApp::new(restore, window, cx)))
+        gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| MulchApp::new(window, cx)))
             .expect("failed to open the window");
         mulch_launcher::trace::mark("window opened");
     });
 }
 
-/// The one window shown when the downloaded copy is run: an "Add to desktop"
-/// checkbox (on by default) and Install. Closing it installs nothing.
-pub fn run_installer() {
-    gpui_kit::application().with_assets(crate::assets::Assets).run(move |cx| {
-        gpui_kit::init(cx);
-        Theme::change(theme_mode(Settings::load().theme, cx.window_appearance()), None, cx);
-        finish_theme(cx);
-        let options = WindowOptions {
-            titlebar: Some(TitlebarOptions { title: Some(APP_NAME.into()), ..TitleBar::title_bar_options() }),
-            app_owns_titlebar_drag: true,
-            window_background: WindowBackgroundAppearance::Opaque,
-            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-                None,
-                size(px(INSTALLER_WIDTH), px(INSTALLER_HEIGHT)),
-                cx,
-            ))),
-            is_resizable: false,
-            app_id: Some(APP_NAME.into()),
-            ..Default::default()
-        };
-        gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| Installer::new(window, cx)))
-            .expect("failed to open the window");
-    });
-}
-
-const INSTALLER_WIDTH: f32 = 440.;
-const INSTALLER_HEIGHT: f32 = 232.;
-/// Room for the "also add these games" heading, and for each game found.
-const INSTALLER_LIST_HEADING: f32 = 40.;
-const INSTALLER_LIST_ROW: f32 = 50.;
-/// Games shown before the list scrolls.
-const INSTALLER_LIST_ROWS: usize = 6;
-
-/// The install window: "Add to desktop", games found on this PC that no
-/// launcher knows about (ticked, to add along with installing), and Install.
-struct Installer {
-    desktop: bool,
-    /// None while still looking.
-    found: Option<Vec<Suggestion>>,
-    selected: HashSet<PathBuf>,
-    error: Option<String>,
-}
-
-impl Installer {
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        // Look for other games while the user decides; grow to list them.
-        cx.spawn_in(window, async move |this, cx| {
-            let found = cx
-                .background_spawn(async move {
-                    let result = scan::scan_all(&[]);
-                    let known = scan::known_folders(&result.games, result.launchers.iter().chain(&result.social));
-                    mulch_discover::find_games(&known)
-                })
-                .await;
-            this.update_in(cx, |this, window, cx| {
-                if !found.is_empty() {
-                    let rows = found.len().min(INSTALLER_LIST_ROWS) as f32;
-                    let height = INSTALLER_HEIGHT + INSTALLER_LIST_HEADING + rows * INSTALLER_LIST_ROW;
-                    window.resize(size(px(INSTALLER_WIDTH), px(height)));
-                }
-                this.selected = found.iter().map(|s| s.exe.clone()).collect();
-                this.found = Some(found);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-        Self { desktop: true, found: None, selected: HashSet::new(), error: None }
-    }
-
-    fn install(&mut self, cx: &mut Context<Self>) {
-        let chosen: Vec<(PathBuf, String)> = self
-            .found
-            .iter()
-            .flatten()
-            .filter(|s| self.selected.contains(&s.exe))
-            .map(|s| (s.exe.clone(), s.name.clone()))
-            .collect();
-        let result = std::env::current_exe().and_then(|download| {
-            let installed = install::install(self.desktop)?;
-            if let (false, Some(dir)) = (chosen.is_empty(), installed.parent()) {
-                manual::add_all_in(&dir.join("data"), chosen)?;
-            }
-            install::hand_over(&installed, &download)
-        });
-        match result {
-            Ok(()) => cx.quit(),
-            Err(err) => {
-                self.error = Some(format!("Couldn't install: {err}"));
-                cx.notify();
-            }
-        }
-    }
-}
-
-impl Render for Installer {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
-        let found = match &self.found {
-            None => Some(
-                div()
-                    .text_sm()
-                    .text_color(muted)
-                    .child("Looking for games that aren't in Steam, Epic or other launchers…")
-                    .into_any_element(),
-            ),
-            Some(found) if found.is_empty() => None,
-            Some(found) => Some(
-                v_flex()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(muted)
-                            .child("Found these games that aren't in any launcher. Add them too?"),
-                    )
-                    .child(
-                        v_flex()
-                            .id("found")
-                            // Room for the rows' hover background, which reaches past their content.
-                            .mx(px(-8.))
-                            .px(px(8.))
-                            .max_h(px(INSTALLER_LIST_ROWS as f32 * INSTALLER_LIST_ROW))
-                            .overflow_y_scroll()
-                            .children(found.iter().enumerate().map(|(ix, game)| {
-                                let exe = game.exe.clone();
-                                let detail = game.exe.display().to_string().into();
-                                check_row(
-                                    ("found", ix),
-                                    self.selected.contains(&game.exe),
-                                    game.name.clone(),
-                                    Some(detail),
-                                    cx,
-                                )
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    if !this.selected.remove(&exe) {
-                                        this.selected.insert(exe.clone());
-                                    }
-                                    cx.notify();
-                                }))
-                            })),
-                    )
-                    .into_any_element(),
-            ),
-        };
-        v_flex()
-            .size_full()
-            .bg(theme.background)
-            .child(TitleBar::new().bg(gpui_kit::transparent_black()).border_color(gpui_kit::transparent_black()))
-            .child(
-                v_flex()
-                    .flex_1()
-                    .px_6()
-                    .pb_6()
-                    .gap_4()
-                    .child(div().text_2xl().font_bold().child(format!("Install {APP_NAME}")))
-                    .child(check_row("desktop", self.desktop, "Add to desktop", None, cx).on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.desktop = !this.desktop;
-                            cx.notify();
-                        },
-                    )))
-                    .children(found)
-                    .children(self.error.clone().map(|error| div().text_sm().text_color(theme.danger).child(error)))
-                    .child(div().flex_1())
-                    .child(
-                        h_flex().justify_end().child(
-                            pill_button("install", "Install", PillKind::Primary, false, cx)
-                                .px(px(28.))
-                                .on_click(cx.listener(|this, _, _, cx| this.install(cx))),
-                        ),
-                    ),
-            )
-    }
-}
 struct MulchApp {
     games: Vec<Game>,
     launchers: Vec<Launcher>,
@@ -270,13 +76,11 @@ struct MulchApp {
     hovered_tile: Option<usize>,
     scanning: bool,
     rescan_requested: bool,
+    /// A new user's found games are being looked for and added.
+    adding_found_games: bool,
     artwork_initialized: bool,
     /// The added game whose Remove button was clicked once (the next click removes).
     confirm_remove: Option<String>,
-    /// Reopening after an update: show the window in the background once it exists.
-    restore: Option<Restore>,
-    /// An update is installed: restart into it when the user isn't using the app.
-    update_ready: bool,
     /// Whether the window is the active one (it only re-checks the library then).
     active: bool,
     /// A quiet re-check of the library is running.
@@ -297,9 +101,6 @@ struct MulchApp {
     theme_tip: Rc<Cell<&'static str>>,
     _subscriptions: Vec<Subscription>,
 }
-
-/// How often an installed copy checks for an update.
-const UPDATE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
 
 /// How often to re-check the installed games while the window is active.
 const LIBRARY_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
@@ -322,7 +123,7 @@ struct AddPanel {
 }
 
 impl MulchApp {
-    fn new(restore: Option<Restore>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         mulch_launcher::trace::mark("app new");
         let mut app = Self {
             games: Vec::new(),
@@ -337,10 +138,9 @@ impl MulchApp {
             hovered_tile: None,
             scanning: false,
             rescan_requested: false,
+            adding_found_games: false,
             artwork_initialized: false,
             confirm_remove: None,
-            restore,
-            update_ready: false,
             active: true,
             checking: false,
             art_pending: HashSet::new(),
@@ -357,11 +157,6 @@ impl MulchApp {
                 }),
                 cx.observe_window_activation(window, |app, window, cx| {
                     app.active = window.is_window_active();
-                    // An update waiting: restart as soon as the user moves on.
-                    if !app.active && app.update_ready {
-                        app.restart_for_update(window, cx);
-                        return;
-                    }
                     if app.active {
                         app.resort(cx);
                         app.check_for_changes(cx);
@@ -375,79 +170,15 @@ impl MulchApp {
         if let Some(games) = load_library() {
             app.games = games;
             app.history.sort(&mut app.games);
+        } else if !app.settings.add_found_games {
+            app.settings.add_found_games = true;
+            app.settings.save();
         }
         app.rescan(cx);
         app.watch_for_running_games(cx);
         app.watch_for_library_changes(cx);
-        app.watch_for_updates(window, cx);
         mulch_launcher::trace::mark("app new done");
         app
-    }
-
-    /// Every so often, records any game with a process running from its
-    /// folder as played. This catches games started from their own launcher
-    /// too, on every platform.
-    /// Installed copies check for a newer release at startup and every few
-    /// hours, download and install it in the background, then restart into
-    /// it: at once if the user isn't using the app, otherwise as soon as they
-    /// switch away. The restart reopens in the background, where it was.
-    fn watch_for_updates(&self, window: &mut Window, cx: &mut Context<Self>) {
-        // The Microsoft Store updates its own copy.
-        if mulch_core::paths::is_packaged() {
-            return;
-        }
-        let Some(dir) = install::install_dir().filter(|_| install::is_installed_copy()) else { return };
-        mulch_update::clean_up(&dir);
-        cx.spawn_in(window, async move |this, cx| {
-            loop {
-                let dir_ = dir.clone();
-                let installed = cx
-                    .background_spawn(async move {
-                        let release = mulch_update::newer_release(env!("CARGO_PKG_VERSION"))?;
-                        mulch_update::install(&release, &dir_).ok()
-                    })
-                    .await;
-                if installed.is_some() {
-                    this.update_in(cx, |app, window, cx| {
-                        app.update_ready = true;
-                        if !app.active {
-                            app.restart_for_update(window, cx);
-                        }
-                    })
-                    .ok();
-                    break;
-                }
-                cx.background_executor().timer(UPDATE_CHECK_INTERVAL).await;
-            }
-        })
-        .detach();
-    }
-
-    /// Starts the newly installed copy where this window is, then quits.
-    fn restart_for_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(exe) = install::install_dir().map(|dir| mulch_update::exe_in(&dir)) else { return };
-        let (bounds, maximized) = match window.window_bounds() {
-            WindowBounds::Maximized(b) | WindowBounds::Fullscreen(b) => (b, true),
-            WindowBounds::Windowed(b) => (b, false),
-        };
-        let minimized = self.hwnd.is_some_and(crate::window_size::is_minimized);
-        let restore = Restore {
-            x: f32::from(bounds.origin.x),
-            y: f32::from(bounds.origin.y),
-            width: f32::from(bounds.size.width),
-            height: f32::from(bounds.size.height),
-            state: if minimized {
-                WindowState::Minimized
-            } else if maximized {
-                WindowState::Maximized
-            } else {
-                WindowState::Normal
-            },
-        };
-        let started = std::process::Command::new(&exe).arg("--restore").arg(restore.to_arg()).spawn();
-        if started.is_ok() {
-            cx.quit();
-        }
     }
 
     /// While the window is active, quietly re-checks which games are
@@ -541,7 +272,13 @@ impl MulchApp {
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx.background_spawn(async move { scan::scan_all(&[]) }).await;
-            let Ok((mut games, mut launchers)) = this.update(cx, |app, cx| app.apply(result, cx)) else {
+            let Ok((mut games, mut launchers)) = this.update(cx, |app, cx| {
+                let applied = app.apply(result, cx);
+                if app.settings.add_found_games && !app.adding_found_games {
+                    app.add_found_games_in_background(cx);
+                }
+                applied
+            }) else {
                 return;
             };
 
@@ -858,6 +595,40 @@ impl MulchApp {
         .detach();
     }
 
+    /// Adds every program on this PC that looks like a game and no launcher
+    /// knows about, without asking: done once, for a new user's library
+    /// (and again next start if it didn't finish).
+    fn add_found_games_in_background(&mut self, cx: &mut Context<Self>) {
+        self.adding_found_games = true;
+        let known = scan::known_folders(&self.games, self.launchers.iter().chain(&self.social));
+        cx.spawn(async move |this, cx| {
+            let (added, saved) = cx
+                .background_spawn(async move {
+                    let (mut added, mut saved) = (false, true);
+                    for suggestion in mulch_discover::find_games(&known) {
+                        match manual::add_named(&suggestion.exe, suggestion.name) {
+                            Ok(new) => added |= new,
+                            Err(_) => saved = false,
+                        }
+                    }
+                    (added, saved)
+                })
+                .await;
+            this.update(cx, |app, cx| {
+                app.adding_found_games = false;
+                if saved {
+                    app.settings.add_found_games = false;
+                    app.settings.save();
+                }
+                if added {
+                    app.rescan(cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn close_add_panel(&mut self, cx: &mut Context<Self>) {
         self.add_panel = None;
         cx.notify();
@@ -1024,14 +795,6 @@ impl MulchApp {
                 let hwnd = handle.hwnd.get();
                 crate::window_size::install(hwnd);
                 self.hwnd = Some(hwnd);
-                if let Some(restore) = self.restore.take() {
-                    crate::window_size::show_behind_foreground(
-                        hwnd,
-                        (restore.x, restore.y, restore.width, restore.height),
-                        restore.state == WindowState::Maximized,
-                        restore.state == WindowState::Minimized,
-                    );
-                }
             }
         }
         if let Some(hwnd) = self.hwnd {

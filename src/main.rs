@@ -4,7 +4,6 @@ mod assets;
 mod ui;
 mod window_size;
 
-use mulch_launcher::restore::Restore;
 use mulch_launcher::{install, scan};
 
 fn main() {
@@ -35,22 +34,13 @@ fn main() {
         print_discover();
         return;
     }
-    // Run by Windows' "Installed apps" > Uninstall (GitHub installs only; the
-    // Store uninstalls its own).
-    if has("--uninstall") && !mulch_core::paths::is_packaged() {
-        let _ = install::uninstall();
-        return;
-    }
-    // Run from anywhere else (e.g. Downloads): the small install window.
-    // Nothing is saved next to this copy.
-    if !install::is_dev_build() && !install::is_installed_copy() && !mulch_core::paths::is_packaged() {
-        ui::run_installer();
-        return;
-    }
-    // Started by the installer: remove the downloaded copy once it closes.
-    let args: Vec<String> = std::env::args().collect();
-    if let Some(download) = args.iter().position(|a| a == "--remove-download").and_then(|ix| args.get(ix + 1)) {
-        install::remove_download(download.into());
+    // Store installs open directly into the library; add the desktop link once.
+    if mulch_core::paths::is_packaged() {
+        std::thread::spawn(|| {
+            if let Err(error) = install::add_store_desktop_shortcut() {
+                mulch_launcher::trace::mark(&format!("desktop shortcut: {error}"));
+            }
+        });
     }
     // Development builds keep their own data in `target`; copy in the data
     // older versions kept in AppData, leaving it there.
@@ -59,11 +49,8 @@ fn main() {
             install::adopt_legacy_data(&data, false);
         }
     }
-    // Restarted after an update: reopen where the old copy was.
-    let restore =
-        args.iter().position(|a| a == "--restore").and_then(|ix| args.get(ix + 1)).and_then(|a| Restore::from_arg(a));
     mulch_launcher::trace::mark("main done");
-    ui::run(restore);
+    ui::run();
 }
 
 /// `MulchLauncher --scan`: prints everything found and how long it took.
