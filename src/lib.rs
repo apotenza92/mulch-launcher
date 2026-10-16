@@ -7,6 +7,7 @@ pub mod launch;
 pub mod layout;
 pub mod scan;
 pub mod settings;
+pub mod sizes;
 
 /// Startup timing, for development: with `MULCH_TRACE` set, each call
 /// appends "<ms since start> <what>" to `%TEMP%\mulch-trace.txt`.

@@ -19,6 +19,7 @@ use mulch_launcher::layout::{
 };
 use mulch_launcher::scan::{self, Action, Art, Game, Launcher, Platform, ScanResult};
 use mulch_launcher::settings::{Settings, ThemeChoice};
+use mulch_launcher::sizes::{self, Sizes};
 use mulch_manual as manual;
 use mulch_posters as posters;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -95,6 +96,12 @@ struct MulchApp {
     action_pressed: Option<std::time::Instant>,
     /// When each game was last played, for sorting most recent first.
     history: History,
+    /// How much disk each game takes, shown on hover.
+    sizes: Sizes,
+    /// Games whose size was measured this run (sizes change with updates).
+    measured: HashSet<String>,
+    /// Sizes are being measured in the background.
+    measuring: bool,
     /// The theme the user chose (light, dark or following Windows), remembered.
     settings: Settings,
     /// The theme button's tooltip text, read as it's drawn so it updates while showing.
@@ -147,6 +154,9 @@ impl MulchApp {
             glyphs: HashMap::new(),
             action_pressed: None,
             history: History::load(),
+            sizes: Sizes::load(),
+            measured: HashSet::new(),
+            measuring: false,
             // Coming back to the window (e.g. after playing): re-sort so the
             // game just played is first.
             _subscriptions: vec![
@@ -335,6 +345,7 @@ impl MulchApp {
             }
         }
         self.games = result.games;
+        self.measure_sizes(cx);
         // So Show in Xbox app opens at once when clicked.
         launch::look_up_xbox_pages(
             self.games
@@ -360,6 +371,45 @@ impl MulchApp {
         self.confirm_remove = None;
         cx.notify();
         (wanted, wanted_launchers)
+    }
+
+    /// Measures, one at a time in the background, the size of each game not
+    /// yet measured this run, most recently played first; each shows as soon
+    /// as it's known.
+    fn measure_sizes(&mut self, cx: &mut Context<Self>) {
+        if self.measuring {
+            return;
+        }
+        self.measuring = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                let next = this.update(cx, |app, _| {
+                    app.games
+                        .iter()
+                        .find(|g| !app.measured.contains(&g.id))
+                        .map(|g| (g.id.clone(), sizes::folder(g).map(PathBuf::from)))
+                });
+                let Ok(next) = next else { return };
+                let Some((id, folder)) = next else { break };
+                let bytes = cx.background_spawn(async move { folder.as_deref().and_then(sizes::measure) }).await;
+                let updated = this.update(cx, |app, cx| {
+                    app.measured.insert(id.clone());
+                    if app.sizes.get(&id) != bytes {
+                        app.sizes.set(&id, bytes);
+                        cx.notify();
+                    }
+                });
+                if updated.is_err() {
+                    return;
+                }
+            }
+            this.update(cx, |app, _| {
+                app.measuring = false;
+                app.sizes.save();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn play(&mut self, game: &Game, window: &mut Window, cx: &mut Context<Self>) {
@@ -459,11 +509,12 @@ impl MulchApp {
             actions.push(glass_slot(GLASS_BUTTON, with_tooltip(button, tip)).into_any_element());
         }
 
-        // Play, big, in the middle of the space above the bottom row.
+        // Play, big, in the middle of the space above the buttons' row,
+        // which sits above the size pill at the bottom.
         let (width, height) = size;
         let half = GLASS_PLAY_BUTTON / 2.;
-        let row = GLASS_INSET + GLASS_BUTTON;
-        let (x, y) = (width / 2., (height - row) / 2.);
+        let row_bottom = SIZE_PILL_INSET + SIZE_PILL_HEIGHT + SIZE_PILL_GAP;
+        let (x, y) = (width / 2., (height - row_bottom - GLASS_BUTTON) / 2.);
         let g = game.clone();
         let play = self
             .glass(
@@ -485,9 +536,33 @@ impl MulchApp {
         let play =
             glass_slot(GLASS_PLAY_BUTTON, with_tooltip(play, "Play")).absolute().left(px(x - half)).top(px(y - half));
 
-        div().absolute().top_0().left_0().size_full().child(play).child(
-            h_flex().absolute().left_0().right_0().bottom(px(GLASS_INSET)).justify_center().gap_2().children(actions),
-        )
+        // How much disk the game takes, once it's been measured.
+        let size_pill = self.sizes.get(&game.id).map(|bytes| {
+            h_flex()
+                .absolute()
+                .left_0()
+                .right_0()
+                .bottom(px(SIZE_PILL_INSET))
+                .justify_center()
+                .child(size_pill(sizes::format(bytes), dark))
+        });
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .child(play)
+            .child(
+                h_flex()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom(px(row_bottom))
+                    .justify_center()
+                    .gap_2()
+                    .children(actions),
+            )
+            .children(size_pill)
     }
     fn apply_art(&mut self, games: Vec<Game>, launchers: Vec<Launcher>, cx: &mut Context<Self>) {
         // Icons may have been added or replaced with trimmed copies.
@@ -1056,11 +1131,10 @@ const GROUP_NAMES: [&str; 3] = ["Played in the last week", "Played in the last m
 
 /// How much of a tile's width an icon (rather than cover art) takes up.
 const ICON_SHARE: f32 = 0.6;
-/// Glass buttons over a hovered poster: sizes, and distance from its edges.
+/// Glass buttons over a hovered poster: sizes.
 const GLASS_PLAY_BUTTON: f32 = 96.;
 /// The button below Play: always two thirds its size.
 const GLASS_BUTTON: f32 = GLASS_PLAY_BUTTON * 2. / 3.;
-const GLASS_INSET: f32 = 14.;
 /// Space above and below the grid.
 const GRID_PADDING: f32 = 20.;
 /// Least space either side of the grid (the window snaps to widths where it's exactly this).
@@ -1235,6 +1309,40 @@ fn glass_button(id: impl Into<ElementId>, content: AnyElement, size: f32, danger
         .active(move |style| style.bg(pressed))
         .child(content)
 }
+
+/// A small label in the glass buttons' style: a game's size under its buttons.
+fn size_pill(text: String, dark: bool) -> Div {
+    let shade = |l: f32| gpui_kit::hsla(240. / 360., 0.06, l, 1.);
+    let (fill, ink, edge) = if dark {
+        (shade(0.16), gpui_kit::white(), shade(0.36))
+    } else {
+        (gpui_kit::white(), shade(0.15), shade(0.85))
+    };
+    div()
+        .h(px(SIZE_PILL_HEIGHT))
+        .px(px(10.))
+        .flex()
+        .items_center()
+        .rounded_full()
+        .bg(fill)
+        .border_1()
+        .border_color(edge)
+        .shadow(vec![BoxShadow {
+            color: gpui_kit::black().opacity(0.35),
+            offset: point(px(0.), px(2.)),
+            blur_radius: px(8.),
+            spread_radius: px(0.),
+            inset: false,
+        }])
+        .text_xs()
+        .font_medium()
+        .text_color(ink)
+        .child(text)
+}
+/// The size pill's height, its distance from the poster's bottom edge, and the space above it.
+const SIZE_PILL_HEIGHT: f32 = 22.;
+const SIZE_PILL_INSET: f32 = 10.;
+const SIZE_PILL_GAP: f32 = 10.;
 
 /// A button's slot (only the button itself takes the mouse).
 fn glass_slot(size: f32, button: impl IntoElement) -> Div {
