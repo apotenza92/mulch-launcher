@@ -97,6 +97,83 @@ pub fn sized(icon: &Path, size: u32) -> Option<PathBuf> {
     Some(out)
 }
 
+/// A portrait backdrop for a game that has only an icon, so its tile looks
+/// like a poster: the icon's own colours blurred into a soft glow that fills
+/// the tile, darker towards the bottom, with a soft shadow where the icon is
+/// drawn on top (centred, `icon_share` of the tile's width). Cached.
+pub fn backdrop(icon: &Path, icon_share: f32) -> Option<PathBuf> {
+    const WIDTH: u32 = 400;
+    const HEIGHT: u32 = 600;
+    let out = cache_dir()?.join(format!("{}-backdrop.png", cache_key(icon)?));
+    if out.is_file() {
+        return Some(out);
+    }
+    let image = image::open(icon).ok()?.to_rgba8();
+    let (w, h) = image.dimensions();
+
+    // Transparent parts take the icon's average colour rather than black.
+    let average = average_colour(&image)?;
+    let flat = image::RgbImage::from_fn(w, h, |x, y| {
+        let p = image.get_pixel(x, y);
+        let a = p[3] as f32 / 255.;
+        image::Rgb(std::array::from_fn(|c| (p[c] as f32 * a + average[c] * (1. - a)).round() as u8))
+    });
+
+    // The middle of the icon at the tile's shape, shrunk to a few blobs of
+    // colour and spread back out smoothly.
+    let (crop_w, crop_h) = if w * 3 > h * 2 { (h * 2 / 3, h) } else { (w, w * 3 / 2) };
+    let (crop_w, crop_h) = (crop_w.clamp(1, w), crop_h.clamp(1, h));
+    let middle = image::imageops::crop_imm(&flat, (w - crop_w) / 2, (h - crop_h) / 2, crop_w, crop_h).to_image();
+    let tiny = image::imageops::resize(&middle, 4, 6, image::imageops::FilterType::Triangle);
+    let soft = image::imageops::resize(&tiny, WIDTH / 8, HEIGHT / 8, image::imageops::FilterType::Triangle);
+    let soft = image::imageops::fast_blur(&soft, 4.);
+    let glow = image::imageops::resize(&soft, WIDTH, HEIGHT, image::imageops::FilterType::Triangle);
+
+    // The icon's silhouette, blurred, a little below where it's drawn.
+    let size = (WIDTH as f32 * icon_share).round() as u32;
+    let scale = size as f32 / w.max(h) as f32;
+    let (sw, sh) = (((w as f32 * scale).round() as u32).max(1), ((h as f32 * scale).round() as u32).max(1));
+    let silhouette = image::imageops::resize(&image, sw, sh, image::imageops::FilterType::Triangle);
+    let mut shadow = image::GrayImage::new(WIDTH, HEIGHT);
+    let (left, top) = ((WIDTH - sw) / 2, (HEIGHT - sh) / 2 + HEIGHT / 50);
+    for (x, y, p) in silhouette.enumerate_pixels() {
+        shadow.put_pixel(left + x, top + y, image::Luma([p[3]]));
+    }
+    let shadow = image::imageops::fast_blur(&shadow, WIDTH as f32 / 30.);
+
+    let backdrop = image::RgbImage::from_fn(WIDTH, HEIGHT, |x, y| {
+        let p = glow.get_pixel(x, y);
+        let rgb = p.0.map(|c| c as f32 / 255.);
+        let luma = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+        // Richer colour, never brighter than a mid tone (white icons make a
+        // grey glow, not a white one), and darkest at the bottom.
+        let depth = 0.7 - 0.35 * (y as f32 / HEIGHT as f32);
+        let ceiling = (0.5 / luma.max(0.01)).min(1.);
+        let shade = 1. - 0.5 * shadow.get_pixel(x, y)[0] as f32 / 255.;
+        image::Rgb(rgb.map(|c| {
+            let saturated = (luma + (c - luma) * 1.3).clamp(0., 1.);
+            (saturated * ceiling * depth * shade * 255.).round() as u8
+        }))
+    });
+    fs::create_dir_all(cache_dir()?).ok()?;
+    backdrop.save(&out).ok()?;
+    Some(out)
+}
+
+/// The average colour of an image's visible pixels.
+fn average_colour(image: &image::RgbaImage) -> Option<[f32; 3]> {
+    let mut sum = [0f32; 3];
+    let mut weight = 0f32;
+    for p in image.pixels() {
+        let a = p[3] as f32 / 255.;
+        for c in 0..3 {
+            sum[c] += p[c] as f32 * a;
+        }
+        weight += a;
+    }
+    (weight > 0.).then(|| sum.map(|c| c / weight))
+}
+
 /// Cache key for a source file: its path and modification time, so an
 /// updated game or launcher gets fresh art.
 fn cache_key(source: &Path) -> Option<String> {

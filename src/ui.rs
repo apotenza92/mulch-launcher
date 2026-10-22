@@ -73,6 +73,8 @@ struct MulchApp {
     /// and the display scale they were made for.
     sized_icons: HashMap<PathBuf, PathBuf>,
     icon_scale: f32,
+    /// Poster-shaped backdrops for games that only have an icon, by icon.
+    backdrops: HashMap<PathBuf, PathBuf>,
     /// The game tile under the mouse, which shows its full name.
     hovered_tile: Option<usize>,
     scanning: bool,
@@ -142,6 +144,7 @@ impl MulchApp {
             hwnd: None,
             sized_icons: HashMap::new(),
             icon_scale: 1.,
+            backdrops: HashMap::new(),
             hovered_tile: None,
             scanning: false,
             rescan_requested: false,
@@ -438,7 +441,8 @@ impl MulchApp {
 
     /// Buttons over a hovered poster: Play, big, centred; below it Show in its
     /// launcher (one per launcher that has it), or for games the user added,
-    /// Remove (which asks again first).
+    /// Open in File Explorer and Remove from MulchLauncher (which asks again
+    /// first, and leaves the game itself installed).
     fn poster_actions(&self, game: &Game, size: (f32, f32), cx: &mut Context<Self>) -> Div {
         let dark = cx.theme().mode.is_dark();
         let mut actions: Vec<AnyElement> = Vec::new();
@@ -479,6 +483,32 @@ impl MulchApp {
         if actions.is_empty()
             && let (Platform::Manual, Action::Exe { path, .. }) = (game.platform, &game.launch)
         {
+            // Two buttons side by side, small like a game's launcher buttons.
+            let button_size = GLASS_SMALL_BUTTON;
+            let exe = path.clone();
+            let name = game.name.clone();
+            let folder = self
+                .glass(
+                    &game.id,
+                    "open-folder",
+                    Icon::empty().path("mulch/folder-open.svg").size(px(button_size * ICON_FILL)).into_any_element(),
+                    button_size,
+                    false,
+                    dark,
+                    cx,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |app, _, window, cx| {
+                        app.action_pressed = Some(std::time::Instant::now());
+                        if let Err(err) = launch::show_in_folder(&exe) {
+                            let message = format!("Couldn't open {name}'s folder: {err}");
+                            window.push_notification(Notification::error(message), cx);
+                        }
+                    }),
+                );
+            actions.push(glass_slot(button_size, with_tooltip(folder, "Open in File Explorer")).into_any_element());
+
             let exe = path.clone();
             let id = game.id.clone();
             let confirming = self.confirm_remove.as_deref() == Some(game.id.as_str());
@@ -486,8 +516,8 @@ impl MulchApp {
                 .glass(
                     &game.id,
                     "remove",
-                    icon_content(IconName::Close, GLASS_BUTTON),
-                    GLASS_BUTTON,
+                    icon_content(IconName::Close, button_size),
+                    button_size,
                     confirming,
                     dark,
                     cx,
@@ -505,8 +535,12 @@ impl MulchApp {
                         }
                     }),
                 );
-            let tip = if confirming { "Click again to remove" } else { "Remove" };
-            actions.push(glass_slot(GLASS_BUTTON, with_tooltip(button, tip)).into_any_element());
+            let tip = if confirming {
+                "Click again to remove from MulchLauncher"
+            } else {
+                "Remove from MulchLauncher (doesn't uninstall the game)"
+            };
+            actions.push(glass_slot(button_size, with_tooltip(button, tip)).into_any_element());
         }
 
         // Play, big, in the middle of the space above the buttons' row,
@@ -583,6 +617,7 @@ impl MulchApp {
         }
         self.make_glyphs(cx);
         self.size_icons(cx);
+        self.make_backdrops(cx);
         save_library(self.games.clone());
         cx.notify();
     }
@@ -612,6 +647,38 @@ impl MulchApp {
                 .await;
             this.update(cx, |app, cx| {
                 app.sized_icons.extend(made);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Makes poster backdrops from the icons of games that have no poster, in
+    /// the background.
+    fn make_backdrops(&mut self, cx: &mut Context<Self>) {
+        let wanted: Vec<PathBuf> = self
+            .games
+            .iter()
+            .filter_map(|g| match &g.art {
+                Some(Art::Icon(icon)) if !self.backdrops.contains_key(icon) => Some(icon.clone()),
+                _ => None,
+            })
+            .collect();
+        if wanted.is_empty() {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let made = cx
+                .background_spawn(async move {
+                    wanted
+                        .into_iter()
+                        .filter_map(|icon| Some((icon.clone(), art::backdrop(&icon, ICON_SHARE)?)))
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            this.update(cx, |app, cx| {
+                app.backdrops.extend(made);
                 cx.notify();
             })
             .ok();
@@ -1024,7 +1091,7 @@ impl MulchApp {
                     .child(Spinner::new().large().color(theme.muted_foreground))
                     .into_any_element()
             } else {
-                artwork(game, width)
+                artwork(game, width, &self.backdrops)
             },
         );
 
@@ -1191,9 +1258,10 @@ fn default_window_size(cx: &App) -> gpui_kit::Size<Pixels> {
 }
 
 /// Cover art fills as much of the tile as it can without cropping. Icons (already trimmed of transparent padding)
-/// sit centred at a fixed share of the tile, so they all look the same size.
+/// sit centred at a fixed share of the tile, so they all look the same size,
+/// over a backdrop made from their colours once it's ready.
 /// No words inside the tile: the name is always shown underneath.
-fn artwork(game: &Game, width: f32) -> AnyElement {
+fn artwork(game: &Game, width: f32, backdrops: &HashMap<PathBuf, PathBuf>) -> AnyElement {
     match &game.art {
         // Fills the tile: scaled evenly until it covers it, trimming what spills
         // over; never stretched.
@@ -1202,6 +1270,19 @@ fn artwork(game: &Game, width: f32) -> AnyElement {
         }
         Some(Art::Icon(path)) => div()
             .size_full()
+            .rounded(px(TILE_RADIUS))
+            .overflow_hidden()
+            .when_some(backdrops.get(path), |tile, backdrop| {
+                tile.child(
+                    img(backdrop.clone())
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .rounded(px(TILE_RADIUS))
+                        .object_fit(ObjectFit::Cover),
+                )
+            })
             .flex()
             .items_center()
             .justify_center()

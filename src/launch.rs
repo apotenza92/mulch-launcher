@@ -4,6 +4,7 @@ use crate::scan::Action;
 use std::collections::HashMap;
 use std::io;
 use std::os::windows::process::CommandExt;
+use std::path::Path;
 use std::process::Command;
 use std::sync::{LazyLock, Mutex};
 
@@ -51,6 +52,11 @@ pub fn run(action: &Action) -> io::Result<()> {
             Ok(())
         }
     }
+}
+
+/// Opens File Explorer at `path`'s folder with `path` selected.
+pub fn show_in_folder(path: &Path) -> io::Result<()> {
+    Command::new("explorer.exe").raw_arg(format!("/select,\"{}\"", path.display())).spawn().map(|_| ())
 }
 
 /// Each Xbox game's Store product id, by package family name: looked up once,

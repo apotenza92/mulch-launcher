@@ -10,12 +10,14 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Steam's own redistributables and runtimes, which aren't games.
+/// Steam's own redistributables and runtimes, and the publisher services
+/// Steam installs alongside some games, which aren't games.
 const NOT_GAMES: &[&str] = &[
     "228980",  // Steamworks Common Redistributables
     "1070560", // Steam Linux Runtime
     "1391110", // Steam Linux Runtime - Soldier
     "1628350", // Steam Linux Runtime - Sniper
+    "4099820", // Ubisoft Connect Services (installed with Ubisoft games)
 ];
 
 /// `StateFlags` bit meaning the app's files are fully installed.
